@@ -25,10 +25,11 @@ should work but are untested.
 Change the namespace. It has no XAF dependency, only `System.Xml.Linq`.
 
 What it does: `FindView(layerXml, viewId)` picks `/Application/Views/*[@Id=viewId]` out of a
-serialised model layer. `MergeViewIntoFile(path, view)` replaces the same-Id element in the target
-xafml (or inserts it where `ModelXmlWriter` would, Index first, then Id), carries the module's own
-`IsNewNode` marker over if it had one, and writes the file back with the declaration and
-indentation the Model Editor uses.
+serialised model layer. `MergeViewIntoFile(path, view)` merges it into the target xafml node by
+node, the way XAF's `ModelNode.MoveNode` moves a layer's node down: values and `IsNewNode`/`Removed`
+state of nodes the diff mentions win, everything else in the module's view stays, and `Removed`
+markers the module must keep carrying are preserved. It writes the file back with the declaration
+and indentation the Model Editor uses. State table: `docs/MERGE-003-PLAN.md`.
 
 ## 3. Copy the controller into the Blazor.Server project
 
@@ -77,8 +78,8 @@ To merge into the Blazor-only layer instead, point it at `YourApp.Blazor.Server/
    the old copy. The view shows the default layout until then, because the user layer was cleared.
 5. Commit the xafml.
 
-If the same view is merged again, the new diff replaces the old one in the file. Last write wins;
-there is no three-way merge.
+If the same view is merged again, the new diff is merged on top of the old one node by node. Last
+write wins per node; there is no three-way merge.
 
 ## 6. Verify once
 
@@ -101,6 +102,7 @@ diff the two and check `docs/DESIGN.md` for the ordering rule.
 
 ## 8. What it deliberately does not do
 
-Whole-model merge, anything outside `Views`, localisation, conflict resolution, WinForms, and
-reconciling `IsNewNode`/`Removed` markers on descendants of a module-defined custom view. The
-limitations list in the README is the contract; extend from `docs/DESIGN.md` if you need more.
+Whole-model merge, anything outside `Views`, localisation, conflict resolution, WinForms, non-canonical
+(hand-edited) xafml, and protecting a merged change from an intervening layer that customises the
+same view. The limitations list in the README is the contract; extend from `docs/DESIGN.md` and
+`docs/MERGE-003-PLAN.md` if you need more.
