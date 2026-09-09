@@ -1,28 +1,60 @@
 # XafMergerTool
 
-**Question:** can a running XAF Blazor app write a view's user-layer customisations back into the
-module's `Model.DesignedDiffs.xafml`, so they become part of the source?
+A "save to source" button for the runtime layout designer in DevExpress XAF Blazor.
 
-**Answer: yes.** One action, *Merge To Module*, takes the current view's diff out of the user layer
-(the `ModelDifference` table), splices it into the module xafml, and clears it from the user layer.
-After rebuild and restart the view looks the same, the table no longer holds the view, and the module
-xafml opens in the Model Editor untouched.
+XAF Blazor lets users rearrange a DetailView at runtime (right-click, *Customize Layout*), and stores
+the result per user in the `ModelDifference` table. That is fine for users, but useless for the
+developer who wants that layout in the module's `Model.DesignedDiffs.xafml` and in git. WinForms has
+the Model Editor and the Model Merge Tool for this. Blazor has nothing.
 
-It is not runtime editing. It is the missing "save to source" button for the layout designer XAF
-Blazor already has.
+This repo answers one question: **can a running XAF Blazor app write a view's user-layer
+customisations back into the module's xafml, so they become part of the source?**
+
+**Yes.** One action, *Merge To Module*, on DetailView and ListView:
+
+1. Takes the current view's diff out of the user layer.
+2. Splices it into the module xafml at a configured path.
+3. Removes it from the user layer, so nothing applies twice.
+
+Rebuild, restart, and the view looks the same, now from source. The merged file opens in the Model
+Editor untouched.
+
+It is not runtime editing and it is not for production. It only makes sense on a developer machine
+with the source checked out, and that is the point.
+
+## Try it
+
+Needs DevExpress 26.1 (XAF Blazor), .NET 10 SDK, SQL Server LocalDB.
+
+```
+cd C:\projects\XafMergerTool\XafMergerTool\XafMergerTool.Blazor.Server
+dotnet run
+```
+
+Log in as `Admin`, no password. Open *Customer*, open *Acme BV*, right-click empty layout space,
+*Customize Layout*, drag *Street* into the second column, close the customization form. Then
+*Tools > Merge To Module*. Look at `XafMergerTool.Module\Model.DesignedDiffs.xafml`: the
+`Customer_DetailView` node is there. Rebuild and restart: the layout survives, and the
+`ModelDifferenceAspect` row for Admin no longer mentions the view.
+
+The action is visible when `Debugger.IsAttached` or `XafModelMerge:Enabled` is true;
+`appsettings.Development.json` turns it on.
+
+## Put it in your own app
+
+See [docs/HOW-TO-IMPLEMENT.md](docs/HOW-TO-IMPLEMENT.md). Two files to copy, one config section,
+about fifteen minutes.
 
 ## What is in the box
 
-- `XafMergerTool.Module`: `Customer` and `Order`, plus `ModelMerge/XafmlViewMerger.cs`, the XML
-  splice (no XAF dependency).
-- `XafMergerTool.Blazor.Server`: `Controllers/MergeToModuleController.cs`, the action. Shown on
-  DetailView and ListView when `Debugger.IsAttached` or `XafModelMerge:Enabled` is true.
-  `XafModelMerge:ModuleXafmlPath` points at the module xafml, relative to the content root
-  (`appsettings.json`; Development turns `Enabled` on).
-- `XafMergerTool.E2E`: the gate (C# Playwright, NUnit) and one unit check for the splice.
-- `docs/DESIGN.md`: the mechanics, with the DevExpress source they come from.
-
-Stack: DevExpress XAF 26.1, .NET 10, EF Core, SQL Server LocalDB, Standard security (Admin, no password).
+| Path | What |
+|---|---|
+| `XafMergerTool.Module/ModelMerge/XafmlViewMerger.cs` | The XML splice. Pure `System.Xml.Linq`, no XAF dependency. |
+| `XafMergerTool.Blazor.Server/Controllers/MergeToModuleController.cs` | The action. Reads the user layer, calls the splice, clears the layer. |
+| `XafMergerTool.Module/BusinessObjects/` | `Customer` and `Order`, a DetailView worth rearranging. |
+| `XafMergerTool.E2E/` | The gate (C# Playwright, NUnit) and one unit check for the splice. |
+| `docs/DESIGN.md` | The mechanics, with the DevExpress source lines they come from. |
+| `docs/HOW-TO-IMPLEMENT.md` | Adding the action to an existing XAF Blazor app. |
 
 ## How the merge works
 
@@ -30,16 +62,16 @@ Stack: DevExpress XAF 26.1, .NET 10, EF Core, SQL Server LocalDB, Standard secur
    action serialises it with XAF's own `ModelXmlWriter`, the same call `ModelDifferenceDbStore`
    uses to persist it, and takes `Views/*[@Id=<view>]`.
 2. The element replaces any same-Id element in the module xafml, or is inserted in the order
-   `ModelXmlWriter` emits (indexed nodes first by `Index`, then by Id). Markers (`IsNewNode`, `Removed`, `Index`) are kept as they are; the
-   module layer needs them just as the user layer did.
+   `ModelXmlWriter` emits (indexed nodes first by `Index`, then by Id). Markers (`IsNewNode`,
+   `Removed`, `Index`) are kept as they are; the module layer needs them just as the user layer did.
 3. `((ModelNode)View.Model).Undo()` drops the user layer's subtree for the view, the same call
    XAF's *Reset View Settings* makes, and `SaveModelChanges()` persists that.
 4. `ModelDifferenceDbStore.SaveDifference` skips an aspect whose XML is empty, so a user layer that
    just lost its only diff would keep stale XML in the table. The action writes an empty
    `<Application/>` into such rows itself, under the same version guard the store uses.
 
-Reviewed against the DevExpress 26.1 source by a second pass (Codex, 2026-09-09); the guards above
-came out of that review.
+Reviewed against the DevExpress 26.1 source by a second pass (Codex, 2026-09-09); the guards in
+the controller came out of that review.
 
 ## The gate
 
