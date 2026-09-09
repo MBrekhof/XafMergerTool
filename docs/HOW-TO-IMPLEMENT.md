@@ -5,6 +5,8 @@ XAF 26.1; the model-layer API it relies on (`ModelApplicationBase.LastLayer`, `M
 `ModelNode.Undo`, `ModelDifferenceDbStore`) has been stable across the 2x.x line, so older versions
 should work but are untested.
 
+![The model layer stack before and after Merge To Module](merge-layers.png)
+
 ## 1. Check the prerequisites
 
 - **XAF Blazor with runtime layout customisation.** Right-click a DetailView, you get *Customize

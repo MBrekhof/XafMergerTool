@@ -65,6 +65,11 @@ about fifteen minutes.
 
 ## How the merge works
 
+![The model layer stack before and after Merge To Module](docs/merge-layers.png)
+
+The diff moves from the per-user row in the `ModelDifference` table into the module's xafml. The
+composed view is the same; what changed is which layer owns it. Source: `docs/merge-layers.excalidraw`.
+
 1. The user layer is `((ModelApplicationBase)Application.Model).LastLayer` (Id `UserDiff`). The
    action serialises it with XAF's own `ModelXmlWriter`, the same call `ModelDifferenceDbStore`
    uses to persist it, and takes `Views/*[@Id=<view>]`.
