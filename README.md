@@ -29,14 +29,17 @@ Stack: DevExpress XAF 26.1, .NET 10, EF Core, SQL Server LocalDB, Standard secur
 1. The user layer is `((ModelApplicationBase)Application.Model).LastLayer` (Id `UserDiff`). The
    action serialises it with XAF's own `ModelXmlWriter`, the same call `ModelDifferenceDbStore`
    uses to persist it, and takes `Views/*[@Id=<view>]`.
-2. The element replaces any same-Id element in the module xafml, or is inserted in Id order, the
-   order `ModelXmlWriter` emits. Markers (`IsNewNode`, `Removed`, `Index`) are kept as they are; the
+2. The element replaces any same-Id element in the module xafml, or is inserted in the order
+   `ModelXmlWriter` emits (indexed nodes first by `Index`, then by Id). Markers (`IsNewNode`, `Removed`, `Index`) are kept as they are; the
    module layer needs them just as the user layer did.
 3. `((ModelNode)View.Model).Undo()` drops the user layer's subtree for the view, the same call
    XAF's *Reset View Settings* makes, and `SaveModelChanges()` persists that.
 4. `ModelDifferenceDbStore.SaveDifference` skips an aspect whose XML is empty, so a user layer that
    just lost its only diff would keep stale XML in the table. The action writes an empty
-   `<Application/>` into such rows itself.
+   `<Application/>` into such rows itself, under the same version guard the store uses.
+
+Reviewed against the DevExpress 26.1 source by a second pass (Codex, 2026-09-09); the guards above
+came out of that review.
 
 ## The gate
 
@@ -83,8 +86,13 @@ ME fails with "Could not load file or assembly DevExpress.Persistent.BaseImpl.EF
 - **Per view only.** Whole-model merge is where the layer semantics get ugly; not attempted.
 - **Views only.** Navigation, actions, localisation and anything else outside `Views` are out of scope.
 - **No conflict handling.** If the module already has a diff for the view, the user layer wins.
-- **Default aspect only.** Only aspect 0 (unlocalised) is merged. A localised aspect for the view
-  stays in the user layer.
+- **Default aspect only.** Only aspect 0 (unlocalised) is merged. If the user layer also holds a
+  localised diff for the view, the action refuses instead of dropping it (`Undo()` clears all aspects).
+- **Views defined in code or a module only.** A view created at runtime in the user layer carries
+  `IsNewNode`, which `Undo()` does not remove; the action refuses those.
+- **Replace is at view level.** The incoming element replaces the module's element wholesale. The
+  view's own `IsNewNode` is carried over if the module created the view; markers on descendants the
+  module created are not reconciled (XAF's own layer move logic is case-by-case; see `ModelNode.cs`).
 - **One platform layer.** The diff lands in the platform-agnostic module. If it should be
   Blazor-only, point `ModuleXafmlPath` at `XafMergerTool.Blazor.Server/Model.xafml`.
 - **Blazor only.** WinForms has the Model Editor and Model Merge Tool for this already.

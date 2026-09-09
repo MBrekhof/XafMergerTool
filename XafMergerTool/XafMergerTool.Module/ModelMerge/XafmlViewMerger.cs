@@ -34,19 +34,31 @@ public static class XafmlViewMerger
             InsertSorted(root, views, e => e.Name.LocalName);
         }
         var viewId = (string?)view.Attribute("Id") ?? throw new ArgumentException("View element has no Id.", nameof(view));
-        views.Elements().FirstOrDefault(e => (string?)e.Attribute("Id") == viewId)?.Remove();
-        InsertSorted(views, new XElement(view), e => (string?)e.Attribute("Id") ?? "");
+        var existing = views.Elements().FirstOrDefault(e => (string?)e.Attribute("Id") == viewId);
+        var merged = new XElement(view);
+        // A view the module itself created carries IsNewNode; dropping it would make the layer an override of nothing.
+        if ((string?)existing?.Attribute("IsNewNode") == "True" && merged.Attribute("IsNewNode") == null)
+            merged.SetAttributeValue("IsNewNode", "True");
+        existing?.Remove();
+        InsertSorted(views, merged, e => (string?)e.Attribute("Id") ?? "");
 
         var settings = new XmlWriterSettings { Indent = true, IndentChars = "  ", NewLineChars = "\r\n", Encoding = new UTF8Encoding(true) };
         using var writer = XmlWriter.Create(xafmlPath, settings);
         doc.Save(writer);
     }
 
-    // ponytail: mirrors SortChildNodesHelper.DoSortNodesByDefault for nodes without Index; Views children never carry one.
+    // Mirrors SortChildNodesHelper.DoSortNodesByDefault: indexed nodes first by Index, then by Id.
     static void InsertSorted(XElement parent, XElement child, Func<XElement, string> key)
     {
-        var k = key(child);
-        var next = parent.Elements().FirstOrDefault(e => Comparer<string>.Default.Compare(key(e), k) > 0);
+        var next = parent.Elements().FirstOrDefault(e => Compare(e, child, key) > 0);
         if (next != null) next.AddBeforeSelf(child); else parent.Add(child);
+    }
+
+    static int Compare(XElement a, XElement b, Func<XElement, string> key)
+    {
+        int? ia = (int?)a.Attribute("Index"), ib = (int?)b.Attribute("Index");
+        if (ia.HasValue != ib.HasValue) return ia.HasValue ? -1 : 1;
+        var byIndex = ia.HasValue ? ia.Value.CompareTo(ib!.Value) : 0;
+        return byIndex != 0 ? byIndex : Comparer<string>.Default.Compare(key(a), key(b));
     }
 }

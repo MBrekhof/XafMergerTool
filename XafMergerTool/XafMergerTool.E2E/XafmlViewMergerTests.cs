@@ -15,7 +15,7 @@ public class XafmlViewMergerTests
             <Application Title="T">
               <Views>
                 <ListView Id="ApplicationUser_ListView" Caption="Users" />
-                <DetailView Id="Customer_DetailView"><Layout><LayoutGroup Id="Main" Caption="old" /></Layout></DetailView>
+                <DetailView Id="Customer_DetailView" IsNewNode="True"><Layout><LayoutGroup Id="Main" Caption="old" /></Layout></DetailView>
               </Views>
             </Application>
             """);
@@ -36,6 +36,7 @@ public class XafmlViewMergerTests
             Is.EqualTo(new[] { "ApplicationUser_ListView", "Customer_DetailView", "Order_ListView" }));
         var detail = views[1];
         Assert.That(detail.Descendants("LayoutGroup"), Is.Empty, "old diff dropped: last write wins");
+        Assert.That((string?)detail.Attribute("IsNewNode"), Is.EqualTo("True"), "module's creation marker survives the replace");
         Assert.That((string?)detail.Descendants("LayoutItem").First().Attribute("Removed"), Is.EqualTo("True"));
         Assert.That((string?)detail.Descendants("LayoutItem").Last().Attribute("IsNewNode"), Is.EqualTo("True"));
         Assert.That(XafmlViewMerger.FindView(layer, "Nope_DetailView"), Is.Null);

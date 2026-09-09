@@ -27,6 +27,16 @@ Can a running XAF Blazor app write a view's user-layer customisations back into 
    would leave stale XML in `ModelDifferenceAspect`. The action writes
    `ModelDifferenceDbStore.EmptyXafml` into the row itself in that case.
 
+## Guards from the Codex source review (2026-09-09)
+
+- Refuse when a localized aspect (index > 0) also holds a diff for the view: `Undo()` clears all aspects.
+- Refuse when the view element itself carries `IsNewNode`: `Undo()` leaves that stub behind
+  (`ResetViewSettingsController` disables itself for the same case).
+- Carry the module element's `IsNewNode` onto the replacement, or the module's own view vanishes.
+- `ClearEmptyUserAspects` honours `SaveDifference`'s `Version` guard.
+- Insertion order is Index-first, then Id, like `DoSortNodesByDefault`.
+- Not handled: markers on descendants the module created (XAF's `ModelNode` move logic is case-by-case).
+
 ## Acceptance
 
 - Playwright (C#, NUnit): log in, open the Customer DetailView, move a field via Customize Layout,
