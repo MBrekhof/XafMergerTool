@@ -22,6 +22,13 @@ Editor untouched.
 It is not runtime editing and it is not for production. It only makes sense on a developer machine
 with the source checked out, and that is the point.
 
+**To be clear about what "writes to source" means:** the Blazor Server process opens the module's
+`Model.DesignedDiffs.xafml` on its own disk and rewrites it. That is the file in your working tree
+when you run the app from Visual Studio or `dotnet run`, so you review the diff and commit it. The
+running app does not pick the change up: the module xafml is compiled in as an embedded resource, so
+you rebuild and restart to see the layout come from source. Deployed anywhere else, the action would
+write into a file nobody reads, which is why it is gated behind `Debugger.IsAttached` or a config flag.
+
 ## Try it
 
 Needs DevExpress 26.1 (XAF Blazor), .NET 10 SDK, SQL Server LocalDB.
