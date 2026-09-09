@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+*.user
+*.log
+TestResults/
+playwright-report/
+.playwright-mcp/

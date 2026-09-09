@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="EasyTest" />
+    <BuildType Name="Release" />
+  </Configurations>
+  <Project Path="XafMergerTool/XafMergerTool.Blazor.Server/XafMergerTool.Blazor.Server.csproj" />
+  <Project Path="XafMergerTool/XafMergerTool.Module/XafMergerTool.Module.csproj" />
+  <Project Path="XafMergerTool/XafMergerTool.E2E/XafMergerTool.E2E.csproj" />
+</Solution>
