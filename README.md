@@ -68,9 +68,11 @@ about fifteen minutes.
 1. The user layer is `((ModelApplicationBase)Application.Model).LastLayer` (Id `UserDiff`). The
    action serialises it with XAF's own `ModelXmlWriter`, the same call `ModelDifferenceDbStore`
    uses to persist it, and takes `Views/*[@Id=<view>]`.
-2. The element replaces any same-Id element in the module xafml, or is inserted in the order
-   `ModelXmlWriter` emits (indexed nodes first by `Index`, then by Id). Markers (`IsNewNode`,
-   `Removed`, `Index`) are kept as they are; the module layer needs them just as the user layer did.
+2. The element is merged into the module xafml node by node, the way XAF's own `ModelNode.MoveNode`
+   moves a layer's node down: for every node the diff mentions, its values and `IsNewNode`/`Removed`
+   state win; nodes and values the diff does not mention stay. Three places where XAF's move would
+   drop a `Removed` marker keep it here, because the user layer is cleared afterwards and the module
+   must carry the suppression itself. State table and deviations: `docs/MERGE-003-PLAN.md`.
 3. `((ModelNode)View.Model).Undo()` drops the user layer's subtree for the view, the same call
    XAF's *Reset View Settings* makes, and `SaveModelChanges()` persists that.
 4. `ModelDifferenceDbStore.SaveDifference` skips an aspect whose XML is empty, so a user layer that
@@ -82,7 +84,7 @@ the controller came out of that review.
 
 ## The gate
 
-`XafMergerTool.E2E/MergeRoundTripTests.cs`, one test:
+`XafMergerTool.E2E/MergeRoundTripTests.cs`, two tests. The first:
 
 1. Log in, open the Customer DetailView, assert the default two-column layout.
 2. Right-click empty layout space, *Customize Layout*, drag *Street* from column 1 onto *Country*
@@ -92,7 +94,10 @@ the controller came out of that review.
 4. Kill the app, `dotnet build`, restart, log in again, assert *Street* is in column 2 via the DOM
    and the table still has no diff for the view.
 
-The test hosts the app itself (builds it, starts the exe on port 5000, kills it), resets state first
+The second repeats the cycle, then moves *Street* back and merges again on top of the module's diff,
+restarts, and asserts the default layout: the node-by-node merge composes correctly.
+
+The tests host the app themselves (build it, start the exe on port 5000, kill it), reset state first
 (removes the view from the xafml, empties the ModelDifference tables), and restores the original
 xafml afterwards. Needs LocalDB and the source tree.
 
@@ -124,14 +129,27 @@ ME fails with "Could not load file or assembly DevExpress.Persistent.BaseImpl.EF
   source checked out and a rebuild afterwards because the module xafml is an embedded resource.
 - **Per view only.** Whole-model merge is where the layer semantics get ugly; not attempted.
 - **Views only.** Navigation, actions, localisation and anything else outside `Views` are out of scope.
-- **No conflict handling.** If the module already has a diff for the view, the user layer wins.
+- **No conflict handling.** Last write wins per node: for a node the diff mentions, the user layer's
+  values and state replace the module's; nodes the diff does not mention are left alone.
 - **Default aspect only.** Only aspect 0 (unlocalised) is merged. If the user layer also holds a
   localised diff for the view, the action refuses instead of dropping it (`Undo()` clears all aspects).
 - **Views defined in code or a module only.** A view created at runtime in the user layer carries
   `IsNewNode`, which `Undo()` does not remove; the action refuses those.
-- **Replace is at view level.** The incoming element replaces the module's element wholesale. The
-  view's own `IsNewNode` is carried over if the module created the view; markers on descendants the
-  module created are not reconciled (XAF's own layer move logic is case-by-case; see `ModelNode.cs`).
+- **Canonical xafml only.** Node types are compared by element name. A hand-edited module file that
+  uses the generic `Item` alias gets a needless type replacement, which discards that node's
+  unspecified values and children.
+- **Intervening layers.** A change the user made on top of the application project's `Model.xafml`
+  (or a tenant layer) lands below it after the merge and can be overridden by it, in values and in
+  structure. Merge into the highest file layer you own when that layer customises the same view.
+- **Platform-specific content in the agnostic module.** The runtime reads it fine; the Model Editor
+  opened on the platform-agnostic module alone shows Blazor-only properties and nodes as unusable.
 - **One platform layer.** The diff lands in the platform-agnostic module. If it should be
   Blazor-only, point `ModuleXafmlPath` at `XafMergerTool.Blazor.Server/Model.xafml`.
+- **Shared model differences in the database.** The Template Kit leaves `CreateCustomModelDifferenceStore`
+  commented out; with it enabled, XAF imports the application project's `Model.xafml` into the
+  `ModelDifference` table once (UserId empty) and ignores the file afterwards. Merging into the
+  *module* xafml still works, because module differences load from assembly resources, not from that
+  table. Merging into `Blazor.Server/Model.xafml` does not: the file is never read again unless you
+  delete the shared row or use the administrative *Import Shared Model Difference* action. And an
+  admin diff stored in that table for the same view sits above the module and wins.
 - **Blazor only.** WinForms has the Model Editor and Model Merge Tool for this already.

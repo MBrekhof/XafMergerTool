@@ -19,8 +19,8 @@ Can a running XAF Blazor app write a view's user-layer customisations back into 
    (`XafApplication.LoadUserDifferences`). `Application.SaveModelChanges()` persists it via
    `ModelDifferenceDbStore.SaveDifference`, which is `new ModelXmlWriter().WriteToString(layer, aspect)`.
 2. Merge serialises the whole user layer with the same writer, takes `/Application/Views/*[@Id=viewId]`
-   from it, and splices that element into the module xafml with `System.Xml.Linq`: same-Id element
-   replaced, otherwise inserted in Id order (the writer's `DoSortNodesByDefault` = Index, then Id).
+   from it, and merges that element into the module xafml node by node with `System.Xml.Linq`,
+   mirroring `ModelNode.MoveNode` (state table and deviations in `MERGE-003-PLAN.md`).
 3. Removing from the user layer is `((ModelNode)View.Model).Undo()`, the same call
    `ResetViewSettingsController` makes. Then `SaveModelChanges()`.
 4. Trap: `SaveDifference` skips an aspect whose XML serialises to empty, so an emptied user layer
@@ -35,7 +35,7 @@ Can a running XAF Blazor app write a view's user-layer customisations back into 
 - Carry the module element's `IsNewNode` onto the replacement, or the module's own view vanishes.
 - `ClearEmptyUserAspects` honours `SaveDifference`'s `Version` guard.
 - Insertion order is Index-first, then Id, like `DoSortNodesByDefault`.
-- Not handled: markers on descendants the module created (XAF's `ModelNode` move logic is case-by-case).
+- Descendant markers (MERGE-003): resolved by the node-by-node merge in `docs/MERGE-003-PLAN.md`.
 
 ## Acceptance
 

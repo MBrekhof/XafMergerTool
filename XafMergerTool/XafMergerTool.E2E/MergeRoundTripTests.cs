@@ -50,41 +50,81 @@ public class MergeRoundTripTests : PageTest
         File.WriteAllText(ModuleXafml, originalXafml);
     }
 
+    static readonly string[] DefaultCol2 = { "Postal Code", "City", "Country" };
+    static readonly string[] StreetInCol2 = { "Postal Code", "City", "Street", "Country" };
+
     [Test]
     public async Task MoveField_Merge_Restart_LayoutComesFromModule()
     {
         await LoginAndOpenCustomer();
-        Assert.That(await Column2Labels(), Is.EqualTo(new[] { "Postal Code", "City", "Country" }), "precondition: default layout");
+        Assert.That(await Column2Labels(), Is.EqualTo(DefaultCol2), "precondition: default layout");
+        await MoveAndMerge("street", "country", StreetInCol2);
 
-        // Runtime layout designer: drag Street from column 1 onto Country in column 2.
-        await OpenLayoutMenu();
-        await page.Locator("[role=menuitem]:has-text('Customize Layout')").ClickAsync();
-        await Expect(page.Locator(".main.design-mode")).ToBeVisibleAsync();
-        await Expect(page.Locator(".xaf-layouteditor-menu")).ToBeVisibleAsync();
-        await DragItem("street", "country");
-        await page.Locator(".xaf-layouteditor-menu button[data-qa-selector='dx-popup-close-button']").ClickAsync();
-        await Expect(page.Locator(".main.design-mode")).ToHaveCountAsync(0);
-        Assert.That(await Column2Labels(), Is.EqualTo(new[] { "Postal Code", "City", "Street", "Country" }), "designer applied the move");
-
-        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
-        await XafButton("Merge To Module").ClickAsync();
-        await Expect(page.GetByText($"Merged {ViewId}")).ToBeVisibleAsync();
-
-        var col2 = XDocument.Load(ModuleXafml).Root!
-            .Element("Views")!.Elements("DetailView").Single(v => (string?)v.Attribute("Id") == ViewId)
-            .Descendants("LayoutGroup").Single(g => (string?)g.Attribute("Id") == "Customer_col2");
+        var col2 = LayoutGroup("Customer_col2");
         Assert.That(col2.Elements("LayoutItem").Select(i => (string?)i.Attribute("Id")),
             Is.EqualTo(new[] { "PostalCode", "City", "Street", "Country" }), "module xafml has the layout node");
         Assert.That(UserLayerXml(), Does.Not.Contain(ViewId), "user layer no longer has the view after merge");
 
+        await RestartAndLogin();
+        Assert.That(await Column2Labels(), Is.EqualTo(StreetInCol2), "layout after restart comes from the module");
+        Assert.That(UserLayerXml(), Does.Not.Contain(ViewId), "user layer still empty for the view after restart");
+    }
+
+    /// <summary>MERGE-003: the second merge lands on top of a module that already has a diff for the view.</summary>
+    [Test]
+    public async Task MoveFieldBack_SecondMergeMergesNodeByNode()
+    {
+        await LoginAndOpenCustomer();
+        await MoveAndMerge("street", "country", StreetInCol2);
+        await RestartAndLogin();
+        Assert.That(await Column2Labels(), Is.EqualTo(StreetInCol2), "first merge in place");
+
+        await MoveAndMerge("street", "name", DefaultCol2);
+
+        Assert.That(LayoutGroup("Customer_col2").Elements("LayoutItem").Select(i => (string?)i.Attribute("Id")),
+            Does.Not.Contain("Street"), "module's own creation in col2 is deleted, not tombstoned");
+        var street = LayoutGroup("Customer_col1").Elements("LayoutItem").Single(i => (string?)i.Attribute("Id") == "Street");
+        Assert.That((string?)street.Attribute("Removed"), Is.EqualTo("True"), "generated Street stays suppressed");
+        Assert.That((string?)street.Attribute("IsNewNode"), Is.EqualTo("True"), "and is re-created by the module");
+        Assert.That(UserLayerXml(), Does.Not.Contain(ViewId));
+        // Kept as a test artifact for the manual Model Editor check.
+        var artifact = Path.Combine(TestContext.CurrentContext.WorkDirectory, "twice-merged.xafml");
+        File.Copy(ModuleXafml, artifact, overwrite: true);
+        TestContext.AddTestAttachment(artifact);
+
+        await RestartAndLogin();
+        Assert.That(await Column2Labels(), Is.EqualTo(DefaultCol2), "layout after two merges composes to the default again");
+        Assert.That(await Column1Labels(), Does.Contain("Street"));
+    }
+
+    async Task MoveAndMerge(string from, string to, string[] expectedCol2)
+    {
+        await OpenLayoutMenu();
+        await page.Locator("[role=menuitem]:has-text('Customize Layout')").ClickAsync();
+        await Expect(page.Locator(".main.design-mode")).ToBeVisibleAsync();
+        await Expect(page.Locator(".xaf-layouteditor-menu")).ToBeVisibleAsync();
+        await DragItem(from, to, expectedCol2);
+        await page.Locator(".xaf-layouteditor-menu button[data-qa-selector='dx-popup-close-button']").ClickAsync();
+        await Expect(page.Locator(".main.design-mode")).ToHaveCountAsync(0);
+        Assert.That(await Column2Labels(), Is.EqualTo(expectedCol2), "designer applied the move");
+
+        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
+        await XafButton("Merge To Module").ClickAsync();
+        await Expect(page.GetByText($"Merged {ViewId}")).ToBeVisibleAsync();
+    }
+
+    async Task RestartAndLogin()
+    {
         Stop();
         await BuildAndStart();
         // Fresh context: the old one keeps sockets to the killed process and script requests stall on them.
         page = await (await Browser.NewContextAsync(ContextOptions())).NewPageAsync();
         await LoginAndOpenCustomer();
-        Assert.That(await Column2Labels(), Is.EqualTo(new[] { "Postal Code", "City", "Street", "Country" }), "layout after restart comes from the module");
-        Assert.That(UserLayerXml(), Does.Not.Contain(ViewId), "user layer still empty for the view after restart");
     }
+
+    static XElement LayoutGroup(string id) => XDocument.Load(ModuleXafml).Root!
+        .Element("Views")!.Elements("DetailView").Single(v => (string?)v.Attribute("Id") == ViewId)
+        .Descendants("LayoutGroup").Single(g => (string?)g.Attribute("Id") == id);
 
     async Task LoginAndOpenCustomer()
     {
@@ -98,15 +138,15 @@ public class MergeRoundTripTests : PageTest
     }
 
     // The editor reacts to the drag only once its JS has rebuilt the layout tree, which nothing in the DOM
-    // announces; so drag, give Blazor a moment, and retry while the item has not moved.
-    async Task DragItem(string fromItem, string toItem)
+    // announces; so drag, give Blazor a moment, and retry while the column has not changed.
+    async Task DragItem(string fromItem, string toItem, string[] expectedCol2)
     {
         for (var attempt = 0; attempt < 10; attempt++)
         {
             await page.Locator($"dxbl-form-layout-item:has(label.xaf-item-{fromItem})")
                 .DragToAsync(page.Locator($"dxbl-form-layout-item:has(label.xaf-item-{toItem})"));
             await Task.Delay(1000);
-            if ((await Column2Labels()).Contains("Street")) return;
+            if ((await Column2Labels()).SequenceEqual(expectedCol2)) return;
         }
         Assert.Fail("drag never moved the item");
     }
@@ -134,10 +174,12 @@ public class MergeRoundTripTests : PageTest
     // XAF renders each toolbar button twice (one virtual copy for overflow measurement).
     ILocator XafButton(string caption) => page.Locator($"button[data-action-name='{caption}']:not([dxbl-virtual-el])");
 
-    Task<string[]> Column2Labels() => page.EvaluateAsync<string[]>(
-        "() => [...document.querySelectorAll('dxbl-form-layout-group')]" +
+    Task<string[]> Column1Labels() => ColumnLabels("Name");
+    Task<string[]> Column2Labels() => ColumnLabels("Postal Code");
+    Task<string[]> ColumnLabels(string anchor) => page.EvaluateAsync<string[]>(
+        "a => [...document.querySelectorAll('dxbl-form-layout-group')]" +
         ".map(g => [...g.querySelectorAll(':scope > .dxbl-row > dxbl-form-layout-item label.dxbl-fl-cpt')].map(l => l.textContent.trim()))" +
-        ".filter(a => a.includes('Postal Code'))[0]");
+        ".filter(x => x.includes(a))[0]", anchor);
 
     // ---- app lifecycle ----
 
