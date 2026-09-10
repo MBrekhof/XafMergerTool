@@ -1,7 +1,7 @@
 # Plan: Model Editor options at Blazor runtime (master-detail, view variants)
 
-Status: implemented 2026-09-10 (MERGE-004 70b5100, MERGE-005 a200bb1, MERGE-006 214e050, MERGE-007
-0bab0bc, MERGE-008 see git log), each reviewed by Codex; D1 and D2 confirmed by the owner the same
+Status: implemented 2026-09-10 (MERGE-004 ebcdcc9, MERGE-005 c6047c7, MERGE-006 40eb0a4, MERGE-007
+f669214, MERGE-008 4d3d057), each reviewed by Codex; D1 and D2 confirmed by the owner the same
 day ("rebuild is the way to go"). What the implementation learned beyond this plan is in
 `DESIGN.md`, "Runtime Model Editor options". Written after a two-model assessment (Claude + Codex, same day) of the
 question "can Merge To Module save a ListView as master-detail, and save a DetailView layout as a
