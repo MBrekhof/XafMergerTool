@@ -138,8 +138,17 @@ ME fails with "Could not load file or assembly DevExpress.Persistent.BaseImpl.EF
   values and state replace the module's; nodes the diff does not mention are left alone.
 - **Default aspect only.** Only aspect 0 (unlocalised) is merged. If the user layer also holds a
   localised diff for the view, the action refuses instead of dropping it (`Undo()` clears all aspects).
-- **Views defined in code or a module only.** A view created at runtime in the user layer carries
-  `IsNewNode`, which `Undo()` does not remove; the action refuses those.
+- **Runtime-created views are merged whole and then removed.** A view the user layer created (*Save As
+  Variant*) carries `IsNewNode` and arrives in the module as a complete node; the action removes it from
+  the user layer instead of `Undo()`, and its other aspects (the `CaptionColon` / `RequiredFieldMark`
+  defaults XAF writes when it first shows a new DetailView) are dropped, not merged.
+- **A variant brings its root's `Variants` node along, and nothing else of the root.** Merging a variant
+  also merges the root view's `Variants` subtree from the user layer (the registration, captions and
+  `Current`), then clears just that subtree. Merging a root view whose `Variants` still reference an
+  unmerged runtime-created view is refused: open that variant and merge it first.
+- **Admin variants stay in the admin's user layer until merged.** Save As Variant writes to the current
+  user's model layer only; other users see the variant after Merge To Module and a rebuild. Sharing at
+  runtime without a rebuild would be the shared model difference store, which is out of scope.
 - **Canonical xafml only.** Node types are compared by element name. A hand-edited module file that
   uses the generic `Item` alias gets a needless type replacement, which discards that node's
   unspecified values and children.

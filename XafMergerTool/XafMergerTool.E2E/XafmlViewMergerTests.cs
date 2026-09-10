@@ -132,4 +132,54 @@ public class XafmlViewMergerTests
         Assert.That(XafmlViewMerger.FindView("<Application/>", "Nope"), Is.Null);
         Assert.That(File.ReadAllText(path), Does.StartWith("﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Application"));
     }
+
+    // MERGE-007: a runtime-created variant (Save As Variant) arrives as a complete IsNewNode view.
+    [Test]
+    public void UserCreatedView_LandsWholeWithMarker()
+    {
+        XafmlViewMerger.MergeViewIntoFile(path, XafmlViewMerger.FindView("""
+            <Application><Views><DetailView Id="Customer_DetailView_Compact" ClassName="X.Customer" IsNewNode="True">
+              <Items IsNewNode="True"><PropertyEditor Id="Name" PropertyName="Name" IsNewNode="True" /></Items>
+              <Layout IsNewNode="True"><LayoutGroup Id="Main" IsNewNode="True"><LayoutItem Id="Name" ViewItem="Name" IsNewNode="True" /></LayoutGroup></Layout>
+            </DetailView></Views></Application>
+            """, "Customer_DetailView_Compact")!);
+        var compact = XDocument.Load(path).Root!.Element("Views")!.Elements().Single(v => (string?)v.Attribute("Id") == "Customer_DetailView_Compact");
+        Assert.That((string?)compact.Attribute("IsNewNode"), Is.EqualTo("True"));
+        Assert.That((string?)compact.Attribute("ClassName"), Is.EqualTo("X.Customer"));
+        Assert.That((string?)compact.Descendants("LayoutItem").Single().Attribute("ViewItem"), Is.EqualTo("Name"), "layout child arrives");
+        Assert.That((string?)compact.Element("Items")!.Attribute("IsNewNode"), Is.EqualTo("True"));
+    }
+
+    // MERGE-007: the root view's Variants subtree is merged on its own, without touching the root's other values.
+    [Test]
+    public void RootVariantsSubtree_MergesWithoutTouchingRoot()
+    {
+        var view = Merge("""
+            <DetailView Id="Customer_DetailView"><Variants Current="Customer_DetailView_Compact">
+              <Variant Id="Customer_DetailView_Compact" ViewID="Customer_DetailView_Compact" Caption="Compact" IsNewNode="True" />
+              <Variant Id="Default" ViewID="Customer_DetailView" Caption="Default" IsNewNode="True" />
+            </Variants></DetailView>
+            """);
+        Assert.That((string?)Node(view, "Main").Attribute("Caption"), Is.EqualTo("Module caption"), "root layout untouched");
+        Assert.That((string?)view.Element("Variants")!.Attribute("Current"), Is.EqualTo("Customer_DetailView_Compact"));
+        Assert.That(view.Element("Variants")!.Elements().Select(v => (string?)v.Attribute("Id")), Is.EqualTo(new[] { "Customer_DetailView_Compact", "Default" }));
+        Assert.That((string?)Node(view, "Default").Attribute("IsNewNode"), Is.EqualTo("True"));
+    }
+
+    // MERGE-007: after a rebuild the variant is a module view; a second merge is a plain diff onto it.
+    [Test]
+    public void SecondMergeOntoMergedVariant_UpdatesValuesKeepsMarker()
+    {
+        UserCreatedView_LandsWholeWithMarker();
+        XafmlViewMerger.MergeViewIntoFile(path, XafmlViewMerger.FindView("""
+            <Application><Views><DetailView Id="Customer_DetailView_Compact"><Layout><LayoutGroup Id="Main">
+              <LayoutItem Id="Name" Index="3" />
+            </LayoutGroup></Layout></DetailView></Views></Application>
+            """, "Customer_DetailView_Compact")!);
+        var compact = XDocument.Load(path).Root!.Element("Views")!.Elements().Single(v => (string?)v.Attribute("Id") == "Customer_DetailView_Compact");
+        Assert.That((string?)compact.Attribute("IsNewNode"), Is.EqualTo("True"), "module's creation marker survives");
+        var item = compact.Descendants("LayoutItem").Single();
+        Assert.That((string?)item.Attribute("Index"), Is.EqualTo("3"));
+        Assert.That((string?)item.Attribute("ViewItem"), Is.EqualTo("Name"), "unmentioned value stays");
+    }
 }
