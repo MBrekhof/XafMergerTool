@@ -38,6 +38,7 @@ namespace XafMergerTool.Blazor.Server
                     {
                         options.AllowValidationDetailsAccess = false;
                     })
+                    .AddViewVariants()
                     .Add<XafMergerTool.Module.XafMergerToolModule>()
                     .Add<XafMergerToolBlazorModule>();
                 builder.ObjectSpaceProviders
