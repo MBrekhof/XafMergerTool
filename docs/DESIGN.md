@@ -48,3 +48,23 @@ Can a running XAF Blazor app write a view's user-layer customisations back into 
 
 Works only on a developer machine with the source checked out. It is the missing "save to source"
 button for the designer the app already has, not runtime editing.
+
+## Runtime Model Editor options (2026-09-10)
+
+Plan and evidence: `ME-AT-RUNTIME-PLAN.md`. The decisions, as implemented:
+
+| | Decision | Where |
+|---|---|---|
+| D1 | An administrator's variant lives in their own user layer until a developer merges and rebuilds. | README limitations |
+| D2 | Runtime actions: role `IsAdministrative` or `CanEditModel`. Merge To Module: developer gate unchanged. | `ModelEditingGuard` |
+| D3 | Merging a variant also merges the root's `Variants` subtree, and only that; the pruned element is named after the root's own diff element. | `MergeToModuleController` |
+| D4 | A user-layer-created view (`IsNewNode`) is merged whole and removed with `IModelNode.Remove()`; module-defined views keep `Undo()`. Other aspects of a user-created view are dropped: they hold only the `CaptionColon` / `RequiredFieldMark` defaults XAF writes when it first shows a new DetailView. | `MergeToModuleController` |
+| D5 | Variant Id = `<root>_<caption sanitised to [A-Za-z0-9]>`; a `Default` entry pointing at the root is added the first time. Captions go to the default aspect via `ModelApplicationBase.SetCurrentAspect("")`, which is what the Model Editor writes and the merge reads (the runtime otherwise writes them to the culture aspect). | `SaveAsVariantController` |
+| D6 | Delete Variant only for runtime-created variants; when only the auto-added `Default` remains, the `Variants` subtree is undone so nothing is left behind. | `SaveAsVariantController` |
+| D7 | Views are re-created in their frame as `ResetViewSettingsController` does: `CreateShortcut`, `SetView(null)`, `ProcessShortcut`. Needed because `ListView` reads `MasterDetailMode` in its constructor (ListView.cs 68/75) and `LoadModel` does not re-read it. A failure re-attaches the previous or root view before it surfaces. Switching between variants goes through the ViewVariants module's `CurrentFrameViewVariantsManager`. | both controllers |
+
+Two things found on the way that the plan did not know: `Frame.Controllers` is a `LightDictionary`
+whose non-generic enumerator throws, so it is iterated with a typed `foreach`; and `SaveDifference`
+skips aspects that serialise to empty, so after a view is removed from the user layer the stale
+aspect row must be cleared explicitly (`UserLayer.ClearEmptyAspects`, the same workaround the merge
+already had for its own Undo).

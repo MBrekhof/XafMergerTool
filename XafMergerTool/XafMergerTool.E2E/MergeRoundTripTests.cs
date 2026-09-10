@@ -97,7 +97,87 @@ public class MergeRoundTripTests : PageTest
         Assert.That(await Column1Labels(), Does.Contain("Street"));
     }
 
-    async Task MoveAndMerge(string from, string to, string[] expectedCol2)
+    /// <summary>MERGE-005/007: the Master-Detail action's ListView diff merges and the split comes from the module.</summary>
+    [Test]
+    public async Task SplitListView_Merge_Restart_SplitComesFromModule()
+    {
+        await Login();
+        Assert.That(await Split(), Is.Null, "precondition: plain list");
+        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
+        await OpenCombo("No Master-Detail");
+        await page.Locator("ul[aria-label='Master-Detail'] >> text=Detail Below").ClickAsync();
+        await Expect(page.Locator(".xaf-masterdetail-container.direction-vertical")).ToBeVisibleAsync();
+
+        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
+        await XafButton("Merge To Module").ClickAsync();
+        await Expect(page.GetByText("Merged Customer_ListView")).ToBeVisibleAsync();
+        var list = ModuleView("Customer_ListView");
+        Assert.That((string?)list.Attribute("MasterDetailMode"), Is.EqualTo("ListViewAndDetailView"));
+        Assert.That((string?)list.Element("SplitLayout")?.Attribute("Direction"), Is.EqualTo("Vertical"));
+        Assert.That(UserLayerViewIds(), Does.Not.Contain("Customer_ListView"));
+
+        await Restart();
+        await Login();
+        Assert.That(await Split(), Is.EqualTo("vertical"), "split after restart comes from the module");
+        Assert.That(UserLayerViewIds(), Does.Not.Contain("Customer_ListView"));
+    }
+
+    /// <summary>MERGE-006/007: a runtime-created variant and its registration merge, and ChangeVariant switches after restart.</summary>
+    [Test]
+    public async Task SaveAsVariant_Merge_Restart_ChangeVariantSwitches()
+    {
+        const string variantId = "Customer_DetailView_Compact";
+        await Login();
+        await OpenAcme();
+        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
+        await XafButton("Save As Variant").ClickAsync();
+        var dialog = page.Locator("[role=dialog]");
+        await dialog.Locator("input[type=text]").FillAsync("Compact");
+        await dialog.Locator("button[data-action-name='OK']:not([dxbl-virtual-el])").ClickAsync();
+        await Expect(dialog).ToHaveCountAsync(0);
+        await Expect(XafButton("Delete Variant")).ToBeVisibleAsync(new() { Timeout = 10000 });
+        Assert.That(await Column2Labels(), Is.EqualTo(DefaultCol2), "variant starts as a copy of the default layout");
+
+        await MoveAndMerge("street", "country", StreetInCol2, $"Merged {variantId} and {ViewId}/Variants");
+
+        var compact = ModuleView(variantId);
+        Assert.That((string?)compact.Attribute("IsNewNode"), Is.EqualTo("True"), "variant is a module-created view");
+        Assert.That(LayoutGroup("Customer_col2", variantId).Elements("LayoutItem").Select(i => (string?)i.Attribute("Id")),
+            Is.EqualTo(new[] { "PostalCode", "City", "Street", "Country" }), "variant's layout carries the move");
+        Assert.That(ModuleView(ViewId).Element("Variants")!.Elements("Variant").Select(v => (string?)v.Attribute("ViewID")),
+            Is.EquivalentTo(new[] { ViewId, variantId }), "root registers both variants");
+        Assert.That(UserLayerViewIds(), Does.Not.Contain(variantId).And.Not.Contain(ViewId), "user layer holds neither the variant nor the registration");
+        await ExpectColumn2(DefaultCol2, "frame is back on the root view");
+
+        await Restart();
+        await Login();
+        await OpenAcme();
+        await ExpectColumn2(StreetInCol2, "module's Current variant opens after restart");
+        await page.Locator("[role=tab]:has-text('Home')").ClickAsync();
+        await OpenCombo("Compact");
+        await page.Locator("ul[aria-label='View'] >> text=Default").ClickAsync();
+        await ExpectColumn2(DefaultCol2, "ChangeVariant switches to the default layout");
+        Assert.That(UserLayerViewIds(), Does.Not.Contain(variantId), "switching only records Current, not the view");
+    }
+
+    // The DevExpress combo box of a SingleChoiceAction in mode style: find it by its current text, open its dropdown.
+    Task OpenCombo(string currentText) => page.EvaluateAsync(
+        "t => [...document.querySelectorAll('dxbl-combo-box')].find(c => c.querySelector('input')?.value === t).querySelector('button').click()", currentText);
+
+    Task<string?> Split() => page.EvaluateAsync<string?>(
+        "() => { const c = document.querySelector('.xaf-masterdetail-container'); return c ? (c.classList.contains('direction-vertical') ? 'vertical' : 'horizontal') : null; }");
+
+    static XElement ModuleView(string id) => XDocument.Load(ModuleXafml).Root!.Element("Views")!.Elements().Single(v => (string?)v.Attribute("Id") == id);
+
+    async Task MoveAndMerge(string from, string to, string[] expectedCol2, string? expectedMessage = null)
+    {
+        await MoveItem(from, to, expectedCol2);
+        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
+        await XafButton("Merge To Module").ClickAsync();
+        await Expect(page.GetByText(expectedMessage ?? $"Merged {ViewId}")).ToBeVisibleAsync();
+    }
+
+    async Task MoveItem(string from, string to, string[] expectedCol2)
     {
         await OpenLayoutMenu();
         await page.Locator("[role=menuitem]:has-text('Customize Layout')").ClickAsync();
@@ -107,32 +187,43 @@ public class MergeRoundTripTests : PageTest
         await page.Locator(".xaf-layouteditor-menu button[data-qa-selector='dx-popup-close-button']").ClickAsync();
         await Expect(page.Locator(".main.design-mode")).ToHaveCountAsync(0);
         Assert.That(await Column2Labels(), Is.EqualTo(expectedCol2), "designer applied the move");
-
-        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
-        await XafButton("Merge To Module").ClickAsync();
-        await Expect(page.GetByText($"Merged {ViewId}")).ToBeVisibleAsync();
     }
 
     async Task RestartAndLogin()
+    {
+        await Restart();
+        await LoginAndOpenCustomer();
+    }
+
+    async Task Restart()
     {
         Stop();
         await BuildAndStart();
         // Fresh context: the old one keeps sockets to the killed process and script requests stall on them.
         page = await (await Browser.NewContextAsync(ContextOptions())).NewPageAsync();
-        await LoginAndOpenCustomer();
     }
 
-    static XElement LayoutGroup(string id) => XDocument.Load(ModuleXafml).Root!
-        .Element("Views")!.Elements("DetailView").Single(v => (string?)v.Attribute("Id") == ViewId)
+    static XElement LayoutGroup(string id, string viewId = ViewId) => ModuleView(viewId)
         .Descendants("LayoutGroup").Single(g => (string?)g.Attribute("Id") == id);
 
     async Task LoginAndOpenCustomer()
+    {
+        await Login();
+        await OpenAcme();
+    }
+
+    async Task Login()
     {
         // Not NetworkIdle: the Blazor circuit's websocket keeps the network busy and the wait times out.
         await page.GotoAsync($"{Url}/Customer_ListView", new() { WaitUntil = WaitUntilState.DOMContentLoaded });
         await Expect(XafButton("Log In")).ToBeVisibleAsync();
         await page.Locator("input[type=text]").First.FillAsync("Admin");
         await XafButton("Log In").ClickAsync();
+        await Expect(page.Locator("[role=gridcell]:has-text('Acme BV')")).ToBeVisibleAsync();
+    }
+
+    async Task OpenAcme()
+    {
         await page.Locator("[role=gridcell]:has-text('Acme BV')").ClickAsync();
         await Expect(page.Locator("label.xaf-item-country")).ToBeVisibleAsync();
     }
@@ -173,6 +264,16 @@ public class MergeRoundTripTests : PageTest
 
     // XAF renders each toolbar button twice (one virtual copy for overflow measurement).
     ILocator XafButton(string caption) => page.Locator($"button[data-action-name='{caption}']:not([dxbl-virtual-el])");
+
+    // A view swap (merge, ChangeVariant) re-renders the layout a moment after the toolbar; poll instead of sleeping.
+    async Task ExpectColumn2(string[] expected, string because)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        string[] actual;
+        while (!(actual = await Column2Labels()).SequenceEqual(expected) && DateTime.UtcNow < deadline)
+            await Task.Delay(250);
+        Assert.That(actual, Is.EqualTo(expected), because);
+    }
 
     Task<string[]> Column1Labels() => ColumnLabels("Name");
     Task<string[]> Column2Labels() => ColumnLabels("Postal Code");
@@ -222,7 +323,7 @@ public class MergeRoundTripTests : PageTest
     static void RemoveViewFromXafml()
     {
         var doc = XDocument.Load(ModuleXafml);
-        doc.Root!.Element("Views")?.Elements().Where(e => (string?)e.Attribute("Id") == ViewId).Remove();
+        doc.Root!.Element("Views")?.Elements().Where(e => ((string?)e.Attribute("Id") ?? "").StartsWith("Customer_")).Remove();
         doc.Save(ModuleXafml);
     }
 
@@ -237,6 +338,10 @@ public class MergeRoundTripTests : PageTest
         }
         catch (SqlException) { /* first run: database does not exist yet */ }
     }
+
+    static string[] UserLayerViewIds() =>
+        XDocument.Parse("<Layers>" + UserLayerXml().Replace("<?xml version=\"1.0\" encoding=\"utf-8\"?>", "") + "</Layers>")
+            .Descendants("Views").Elements().Select(v => (string?)v.Attribute("Id") ?? "").ToArray();
 
     static string UserLayerXml()
     {

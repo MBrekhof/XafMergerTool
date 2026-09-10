@@ -19,6 +19,19 @@ customisations back into the module's xafml, so they become part of the source?*
 Rebuild, restart, and the view looks the same, now from source. The merged file opens in the Model
 Editor untouched.
 
+Since 2026-09-10 the runtime also offers the Model Editor's view options that Blazor has no UI for,
+so an administrator can shape them and the developer merges the result:
+
+| Model Editor | Runtime action | Writes |
+|---|---|---|
+| ListView > MasterDetailMode, SplitLayout > Direction / ViewsOrder | *Master-Detail* (No Master-Detail, Detail Right / Below / Left / Above) | `MasterDetailMode`, `SplitLayout` |
+| ListView > MasterDetailView | *Detail View* | `MasterDetailView` |
+| Views > add DetailView / ListView, generate content, Variants > Add | *Save As Variant* | a complete new view node, `Variants` on the root view |
+| Variants > delete | *Delete Variant* (runtime-created variants only) | removes both again |
+
+These actions are active for a role with `IsAdministrative` or `CanEditModel`; *Merge To Module*
+stays developer-only. Plan and decisions: [docs/ME-AT-RUNTIME-PLAN.md](docs/ME-AT-RUNTIME-PLAN.md).
+
 It is not runtime editing and it is not for production. It only makes sense on a developer machine
 with the source checked out, and that is the point.
 
@@ -47,17 +60,34 @@ Log in as `Admin`, no password. Open *Customer*, open *Acme BV*, right-click emp
 The action is visible when `Debugger.IsAttached` or `XafModelMerge:Enabled` is true;
 `appsettings.Development.json` turns it on.
 
+**Master-detail list:** open *Customer*, *Tools > Master-Detail > Detail Below*. The list re-creates
+itself with the selected customer's form under it. *Tools > Merge To Module*, rebuild, restart: the
+split now comes from `Customer_ListView` in the module xafml (`MasterDetailMode`, `SplitLayout`).
+
+**Second layout as a variant:** open *Acme BV*, *Tools > Save As Variant*, caption `Compact`. The
+form now shows the copy (`Customer_DetailView_Compact`) and the *View* combo on the Home tab lists
+*Default* and *Compact*. Rearrange it with *Customize Layout*, then *Tools > Merge To Module*: the
+variant and the root's `Variants` node land in the xafml, the frame goes back to the default view.
+Rebuild, restart, open *Acme BV*: it opens in *Compact* (the module's `Current`), and the combo
+switches between the two. *Delete Variant* removes a variant that has not been merged yet.
+
 ## Put it in your own app
 
-See [docs/HOW-TO-IMPLEMENT.md](docs/HOW-TO-IMPLEMENT.md). Two files to copy, one config section,
-about fifteen minutes.
+See [docs/HOW-TO-IMPLEMENT.md](docs/HOW-TO-IMPLEMENT.md). Three files to copy, one config section,
+about fifteen minutes; four more files and the ViewVariants module if you want the runtime
+master-detail and variant actions too.
 
 ## What is in the box
 
 | Path | What |
 |---|---|
 | `XafMergerTool.Module/ModelMerge/XafmlViewMerger.cs` | The XML splice. Pure `System.Xml.Linq`, no XAF dependency. |
-| `XafMergerTool.Blazor.Server/Controllers/MergeToModuleController.cs` | The action. Reads the user layer, calls the splice, clears the layer. |
+| `XafMergerTool.Blazor.Server/Controllers/MergeToModuleController.cs` | The action. Reads the user layer, calls the splice, clears the layer. Knows variants. |
+| `XafMergerTool.Blazor.Server/Controllers/ListViewSettingsController.cs` | *Master-Detail* and *Detail View* actions on root ListViews. |
+| `XafMergerTool.Blazor.Server/Controllers/SaveAsVariantController.cs` | *Save As Variant* and *Delete Variant* on root object views. |
+| `XafMergerTool.Module/ModelMerge/UserLayer.cs` | The user layer: find it, serialise a view's diff, tell a runtime-created view, clear stale aspect rows. |
+| `XafMergerTool.Module/ModelMerge/ModelEditingGuard.cs` | Who may use the runtime actions: `IsAdministrative` or `CanEditModel`. |
+| `XafMergerTool.Module/ModelMerge/SaveAsVariantParameters.cs` | The caption popup for *Save As Variant*. |
 | `XafMergerTool.Module/BusinessObjects/` | `Customer` and `Order`, a DetailView worth rearranging. |
 | `XafMergerTool.E2E/` | The gate (C# Playwright, NUnit) and one unit check for the splice. |
 | `docs/DESIGN.md` | The mechanics, with the DevExpress source lines they come from. |
@@ -89,7 +119,8 @@ the controller came out of that review.
 
 ## The gate
 
-`XafMergerTool.E2E/MergeRoundTripTests.cs`, two tests. The first:
+`XafMergerTool.E2E/MergeRoundTripTests.cs`, four tests, plus twelve marker checks on the splice in
+`XafmlViewMergerTests.cs`. The first round trip:
 
 1. Log in, open the Customer DetailView, assert the default two-column layout.
 2. Right-click empty layout space, *Customize Layout*, drag *Street* from column 1 onto *Country*
@@ -101,6 +132,12 @@ the controller came out of that review.
 
 The second repeats the cycle, then moves *Street* back and merges again on top of the module's diff,
 restarts, and asserts the default layout: the node-by-node merge composes correctly.
+
+The third picks *Detail Below* on the Customer list, asserts the split (`.xaf-masterdetail-container
+.direction-vertical`), merges, restarts, and asserts the split comes from the module. The fourth
+saves *Compact* as a variant, moves *Street* in it, merges, asserts the variant node and the root's
+`Variants` in the xafml and a clean user layer, restarts, and asserts *Compact* opens by default and
+the *View* combo switches back to the default layout.
 
 The tests host the app themselves (build it, start the exe on port 5000, kill it), reset state first
 (removes the view from the xafml, empties the ModelDifference tables), and restores the original
@@ -137,7 +174,10 @@ ME fails with "Could not load file or assembly DevExpress.Persistent.BaseImpl.EF
 - **No conflict handling.** Last write wins per node: for a node the diff mentions, the user layer's
   values and state replace the module's; nodes the diff does not mention are left alone.
 - **Default aspect only.** Only aspect 0 (unlocalised) is merged. If the user layer also holds a
-  localised diff for the view, the action refuses instead of dropping it (`Undo()` clears all aspects).
+  localised diff for a module-defined view, the action refuses instead of dropping it (`Undo()`
+  clears all aspects). Variant captions are written to the default aspect for this reason.
+- **Split layout needs `DxGridListEditor`.** The *Master-Detail* action hides on other list editors
+  and in lookup popups; Blazor renders the split only there (docs 113249).
 - **Runtime-created views are merged whole and then removed.** A view the user layer created (*Save As
   Variant*) carries `IsNewNode` and arrives in the module as a complete node; the action removes it from
   the user layer instead of `Undo()`, and its other aspects (the `CaptionColon` / `RequiredFieldMark`

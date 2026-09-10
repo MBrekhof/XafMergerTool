@@ -68,13 +68,14 @@ public class MergeToModuleController : ViewController
 
         // A variant is reachable only through its root view's Variants node, which lives in the user layer too:
         // merge that subtree along, and nothing else of the root (D3).
-        var rootId = Frame.GetController<ChangeVariantController>()?.CurrentFrameViewVariantsManager?.Variants?.RootViewId ?? viewId;
+        var variantsManager = Frame.GetController<ChangeVariantController>()?.CurrentFrameViewVariantsManager;
+        var rootId = variantsManager?.Variants?.RootViewId ?? viewId;
         var rootDiff = rootId == viewId ? null : UserLayer.ViewDiff(userLayer, rootId);
         var rootVariants = rootDiff?.Element("Variants");
         if (rootId == viewId)
             foreach (var v in view.Element("Variants")?.Elements() ?? [])
                 if (UserLayer.IsUserCreated(Application, (string?)v.Attribute("ViewID") ?? ""))
-                    throw new UserFriendlyException($"Variant {v.Attribute("ViewID")} exists only in the user layer; open it and merge it first.");
+                    throw new UserFriendlyException($"Variant {(string?)v.Attribute("ViewID")} exists only in the user layer; open it and merge it first.");
 
         var path = ResolveModulePath();
         void MergeFiles()
@@ -111,6 +112,9 @@ public class MergeToModuleController : ViewController
                 MergeFiles();
                 ((IModelNode)Application.Model.Views[viewId]).Remove();
                 ClearUserLayer();
+                // The ViewVariants frame manager caches the root's variants with Current = this view; let it re-read
+                // the model, which no longer has the view, before the root goes back into the frame.
+                variantsManager?.RefreshVariants();
                 Frame.SetView(Application.ProcessShortcut(shortcut));
             }
             catch

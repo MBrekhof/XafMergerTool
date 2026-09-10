@@ -1,7 +1,9 @@
 # Plan: Model Editor options at Blazor runtime (master-detail, view variants)
 
-Status: draft 1, 2026-09-10; D1 and D2 confirmed by the owner the same day ("rebuild is the way to
-go"). Written after a two-model assessment (Claude + Codex, same day) of the
+Status: implemented 2026-09-10 (MERGE-004 70b5100, MERGE-005 a200bb1, MERGE-006 214e050, MERGE-007
+0bab0bc, MERGE-008 see git log), each reviewed by Codex; D1 and D2 confirmed by the owner the same
+day ("rebuild is the way to go"). What the implementation learned beyond this plan is in
+`DESIGN.md`, "Runtime Model Editor options". Written after a two-model assessment (Claude + Codex, same day) of the
 question "can Merge To Module save a ListView as master-detail, and save a DetailView layout as a
 second option?". Both said yes; this plan adds the runtime UI the Model Editor has and the
 Blazor runtime lacks, and the two merge changes that make variants round-trip.
@@ -205,11 +207,14 @@ ViewVariants registration; DESIGN.md gets the D1 to D7 table. Layer diagram unch
 | MERGE-008 | 7 |
 | Total | 18 |
 
-## Open risks
+## Open risks (as of implementation)
 
-- D7's `ProcessShortcut` re-creation of a root ListView in the same frame is the one mechanic not
-  verified against source in this plan; first hour of MERGE-005 settles it.
-- The Blazor split-view DOM has no documented stable selector; the E2E pins one and it may need a
-  bump on a DX upgrade.
+- D7 settled from source: `ListView` reads `MasterDetailMode` in its constructor, so the view is
+  re-created via `CreateShortcut` / `SetView(null)` / `ProcessShortcut`, the path
+  `ResetViewSettingsController` uses.
+- The Blazor split-view DOM selector is `.xaf-masterdetail-container.direction-vertical|horizontal`;
+  undocumented, may need a bump on a DX upgrade.
 - `IModelVariants.Current` is also where the runtime stores each user's last selection, so it lands in
   the module as whatever the admin last picked. Same as the ME's `Current`, documented, not fixed.
+- Layout re-render after a view swap lags the toolbar by a moment; the E2E polls the column labels
+  for up to 15 s instead of asserting immediately.
