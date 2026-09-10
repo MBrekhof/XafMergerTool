@@ -4,7 +4,6 @@ using DevExpress.ExpressApp.Actions;
 using DevExpress.ExpressApp.Model;
 using DevExpress.ExpressApp.Model.Core;
 using DevExpress.Persistent.Base;
-using DevExpress.Persistent.BaseImpl.EF;
 using XafMergerTool.Module.ModelMerge;
 
 namespace XafMergerTool.Blazor.Server.Controllers;
@@ -46,9 +45,8 @@ public class MergeToModuleController : ViewController
 
     void Merge_Execute(object sender, SimpleActionExecuteEventArgs e)
     {
-        var userLayer = ((ModelApplicationBase)Application.Model).LastLayer;
-        if (userLayer?.Id != "UserDiff")
-            throw new UserFriendlyException("No user model layer is loaded; is the Security System enabled?");
+        var userLayer = UserLayer.Get(Application)
+            ?? throw new UserFriendlyException("No user model layer is loaded; is the Security System enabled?");
 
         var viewId = View.Model.Id;
         var writer = new ModelXmlWriter();
@@ -72,7 +70,7 @@ public class MergeToModuleController : ViewController
         // Same call ResetViewSettingsController makes: drops the last (user) layer's subtree for this view.
         ((ModelNode)View.Model).Undo();
         Application.SaveModelChanges();
-        ClearEmptyUserAspects(userLayer);
+        UserLayer.ClearEmptyAspects(Application);
 
         Application.ShowViewStrategy.ShowMessage(
             $"Merged {viewId} into {path}. Rebuild and restart to load it from the module.", InformationType.Success, 8000);
@@ -86,24 +84,5 @@ public class MergeToModuleController : ViewController
             throw new UserFriendlyException("XafModelMerge:ModuleXafmlPath is not configured.");
         var env = Application.ServiceProvider.GetRequiredService<IWebHostEnvironment>();
         return Path.GetFullPath(configured, env.ContentRootPath);
-    }
-
-    // ModelDifferenceDbStore.SaveDifference skips aspects whose XML serialises to empty, so a user layer
-    // that just lost its only diff keeps its old XML in the table and re-applies it on restart. Clear it here.
-    void ClearEmptyUserAspects(ModelApplicationBase userLayer)
-    {
-        var userId = ModelDifferenceDbStore.UserIdTypeConverter.ConvertToInvariantString(Application.Security.UserId);
-        using var os = Application.CreateObjectSpace(typeof(ModelDifference));
-        var diff = ModelDifferenceDbStore.FindModelDifference(os, typeof(ModelDifference), userId, "Blazor");
-        // Same guard as SaveDifference: never overwrite a row newer than the layer we hold.
-        if (diff == null || diff.Version > userLayer.Version) return;
-        var writer = new ModelXmlWriter();
-        for (var i = 0; i < userLayer.AspectCount; i++)
-        {
-            if (!string.IsNullOrEmpty(writer.WriteToString(userLayer, i))) continue;
-            var aspect = ModelDifferenceDbStore.FindModelDifferenceAspect(diff, userLayer.GetAspect(i));
-            if (aspect != null) aspect.Xml = ModelDifferenceDbStore.EmptyXafml;
-        }
-        os.CommitChanges();
     }
 }

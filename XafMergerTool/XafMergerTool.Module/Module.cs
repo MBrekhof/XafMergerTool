@@ -21,6 +21,7 @@ namespace XafMergerTool.Module
             // XafMergerToolModule
             //
             AdditionalExportedTypes.Add(typeof(XafMergerTool.Module.BusinessObjects.ApplicationUser));
+            AdditionalExportedTypes.Add(typeof(XafMergerTool.Module.ModelMerge.SaveAsVariantParameters));
             AdditionalExportedTypes.Add(typeof(DevExpress.Persistent.BaseImpl.EF.PermissionPolicy.PermissionPolicyRole));
             AdditionalExportedTypes.Add(typeof(DevExpress.Persistent.BaseImpl.EF.ModelDifference));
             AdditionalExportedTypes.Add(typeof(DevExpress.Persistent.BaseImpl.EF.ModelDifferenceAspect));
