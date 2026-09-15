@@ -133,6 +133,68 @@ public class XafmlViewMergerTests
         Assert.That(File.ReadAllText(path), Does.StartWith("﻿<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<Application"));
     }
 
+    // A module xafml may carry explanatory XML comments. The Model Editor strips them; the merger must not,
+    // or every merge would produce a noisy diff.
+    [Test]
+    public void Comments_in_the_module_file_survive_a_merge()
+    {
+        File.WriteAllText(path, Module.Replace("<Views>", "<Views>\r\n    <!-- keep me -->"));
+        Merge("""<DetailView Id="Customer_DetailView"><Layout><LayoutGroup Id="Main" Caption="New caption" /></Layout></DetailView>""");
+        Assert.That(File.ReadAllText(path), Does.Contain("<!-- keep me -->"));
+    }
+
+    // Overlaps(): whether a layer above the target (the application project's Model.xafml) would override a merge.
+    static XElement El(string xml) => XElement.Parse(xml);
+
+    [Test]
+    public void Overlaps_is_false_when_the_upper_node_only_sets_unrelated_attributes()
+    {
+        var upper = El("""<ListView Id="Customer_ListView" EditorTypeName="X.DxGridListEditor" DetailViewID="Customer_DetailView_Tree" />""");
+        var diff = El("""<ListView Id="Customer_ListView"><Columns><ColumnInfo Id="Name" Width="80" /></Columns></ListView>""");
+        Assert.That(XafmlViewMerger.Overlaps(upper, diff), Is.False);
+    }
+
+    [Test]
+    public void Overlaps_is_true_when_both_set_the_same_attribute_anywhere_in_the_tree()
+    {
+        var upper = El("""<ListView Id="V" EditorTypeName="X"><Columns><ColumnInfo Id="Name" Width="50" /></Columns></ListView>""");
+        Assert.That(XafmlViewMerger.Overlaps(upper, El("""<ListView Id="V" ShowAutoFilterRow="True" />""")), Is.False, "different attribute on the root");
+        Assert.That(XafmlViewMerger.Overlaps(upper, El("""<ListView Id="V" EditorTypeName="Y" />""")), Is.True, "same attribute on the root");
+        Assert.That(XafmlViewMerger.Overlaps(upper, El("""<ListView Id="V"><Columns><ColumnInfo Id="Name" Width="80" /></Columns></ListView>""")), Is.True, "same attribute on a child");
+        Assert.That(XafmlViewMerger.Overlaps(upper, El("""<ListView Id="V"><Columns><ColumnInfo Id="Name" Index="3" /></Columns></ListView>""")), Is.False, "different attribute on the same child");
+        Assert.That(XafmlViewMerger.Overlaps(upper, El("""<ListView Id="V"><Columns><ColumnInfo Id="Street" Width="80" /></Columns></ListView>""")), Is.False, "different child");
+    }
+
+    [Test]
+    public void Overlaps_is_true_on_state_markers_on_a_shared_node()
+    {
+        var upper = El("""<DetailView Id="V"><Layout><LayoutGroup Id="Main"><LayoutItem Id="Street" Removed="True" /></LayoutGroup></Layout></DetailView>""");
+        Assert.That(XafmlViewMerger.Overlaps(upper, El("""<DetailView Id="V"><Layout><LayoutGroup Id="Main"><LayoutItem Id="Street" Index="2" /></LayoutGroup></Layout></DetailView>""")), Is.True, "upper removed what the diff positions");
+        Assert.That(XafmlViewMerger.Overlaps(upper, El("""<DetailView Id="V"><Layout><LayoutGroup Id="Main"><LayoutItem Id="Other" Removed="True" /></LayoutGroup></Layout></DetailView>""")), Is.False, "diff removes a node the upper layer does not mention");
+        Assert.That(XafmlViewMerger.Overlaps(El("""<DetailView Id="V" />"""), El("""<DetailView Id="W" />""")), Is.False, "different views never overlap");
+    }
+
+    // Language aspects go to the localization sibling of the target file, whichever naming XAF used.
+    [Test]
+    public void FindLocalizationFile_knows_both_XAF_naming_conventions_and_needs_an_existing_file()
+    {
+        var dir = Path.Combine(TestContext.CurrentContext.WorkDirectory, $"loc-{TestContext.CurrentContext.Test.ID}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var module = Path.Combine(dir, "Model.DesignedDiffs.xafml");
+            var app = Path.Combine(dir, "Model.xafml");
+            Assert.That(XafmlViewMerger.FindLocalizationFile(module, "nl-NL"), Is.Null, "nothing exists yet");
+
+            File.WriteAllText(Path.Combine(dir, "Model.DesignedDiffs.Localization.nl-NL.xafml"), "<Application/>");
+            File.WriteAllText(Path.Combine(dir, "Model_nl-NL.xafml"), "<Application/>");
+            Assert.That(XafmlViewMerger.FindLocalizationFile(module, "nl-NL"), Is.EqualTo(Path.Combine(dir, "Model.DesignedDiffs.Localization.nl-NL.xafml")), "module convention");
+            Assert.That(XafmlViewMerger.FindLocalizationFile(app, "nl-NL"), Is.EqualTo(Path.Combine(dir, "Model_nl-NL.xafml")), "application-project convention");
+            Assert.That(XafmlViewMerger.FindLocalizationFile(module, "en-US"), Is.Null, "no en-US file: the developer decides whether to add one");
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     // MERGE-007: a runtime-created variant (Save As Variant) arrives as a complete IsNewNode view.
     [Test]
     public void UserCreatedView_LandsWholeWithMarker()

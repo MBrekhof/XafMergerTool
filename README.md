@@ -108,19 +108,34 @@ composed view is the same; what changed is which layer owns it. Source: `docs/me
    state win; nodes and values the diff does not mention stay. Three places where XAF's move would
    drop a `Removed` marker keep it here, because the user layer is cleared afterwards and the module
    must carry the suppression itself. State table and deviations: `docs/MERGE-003-PLAN.md`.
-3. `((ModelNode)View.Model).Undo()` drops the user layer's subtree for the view, the same call
-   XAF's *Reset View Settings* makes, and `SaveModelChanges()` persists that.
-4. `ModelDifferenceDbStore.SaveDifference` skips an aspect whose XML is empty, so a user layer that
+3. Language aspects come along. A caption renamed in the layout designer is written to the aspect of
+   the UI language active at that moment, not to the default aspect, so an app that runs in `nl-NL`
+   has such a diff on most customised views. Each aspect's view diff is merged into the target's
+   localization sibling (`Model.DesignedDiffs.Localization.nl-NL.xafml`, or `Model_nl-NL.xafml` for
+   an application project), found by `XafmlViewMerger.FindLocalizationFile`. The file must exist:
+   a new one would also need an `EmbeddedResource` entry, which is the developer's call.
+4. `((ModelNode)View.Model).Undo()` drops the user layer's subtree for the view, the same call
+   XAF's *Reset View Settings* makes, and `SaveModelChanges()` persists that. `Undo()` clears every
+   aspect, which is why step 3 is not optional.
+5. `ModelDifferenceDbStore.SaveDifference` skips an aspect whose XML is empty, so a user layer that
    just lost its only diff would keep stale XML in the table. The action writes an empty
    `<Application/>` into such rows itself, under the same version guard the store uses.
+6. The application project's `Model.xafml` sits above the module. A view that file *creates*
+   (`IsNewNode` there: a dashboard around a Razor component, a chart list with a platform editor) is
+   merged into that file instead, since the module never defines it. For any other view the action
+   checks, node by node, whether the platform file would override part of the diff
+   (`XafmlViewMerger.Overlaps`: same node and same attribute, or a `Removed`/`IsNewNode` marker on a
+   shared node) and refuses only then. A platform node that merely carries an `EditorTypeName` while
+   the diff moves columns does not block the merge.
 
 Reviewed against the DevExpress 26.1 source by a second pass (Codex, 2026-09-09); the guards in
 the controller came out of that review.
 
 ## The gate
 
-`XafMergerTool.E2E/MergeRoundTripTests.cs`, four tests, plus twelve marker checks on the splice in
-`XafmlViewMergerTests.cs`. The first round trip:
+`XafMergerTool.E2E/MergeRoundTripTests.cs`, four tests, plus seventeen unit checks in
+`XafmlViewMergerTests.cs`: twelve on the splice markers, one that XML comments in the module file
+survive, three on `Overlaps`, one on `FindLocalizationFile`. The first round trip:
 
 1. Log in, open the Customer DetailView, assert the default two-column layout.
 2. Right-click empty layout space, *Customize Layout*, drag *Street* from column 1 onto *Country*
@@ -173,9 +188,12 @@ ME fails with "Could not load file or assembly DevExpress.Persistent.BaseImpl.EF
 - **Views only.** Navigation, actions, localisation and anything else outside `Views` are out of scope.
 - **No conflict handling.** Last write wins per node: for a node the diff mentions, the user layer's
   values and state replace the module's; nodes the diff does not mention are left alone.
-- **Default aspect only.** Only aspect 0 (unlocalised) is merged. If the user layer also holds a
-  localised diff for a module-defined view, the action refuses instead of dropping it (`Undo()`
-  clears all aspects). Variant captions are written to the default aspect for this reason.
+- **A language aspect needs its localization file.** Aspect diffs are merged into the target's
+  `*.Localization.<culture>.xafml` / `Model_<culture>.xafml`; when that file does not exist the action
+  refuses rather than creating one (it would also need an `EmbeddedResource` entry). Variant captions
+  are written to the default aspect regardless. Watch what lands there: a controller that sets
+  `PredefinedValues` at runtime writes into the language aspect too, and merging that view puts the
+  baked value list into the localization file.
 - **Split layout needs `DxGridListEditor`.** The *Master-Detail* action hides on other list editors
   and in lookup popups; Blazor renders the split only there (docs 113249).
 - **Runtime-created views are merged whole and then removed.** A view the user layer created (*Save As
@@ -192,13 +210,21 @@ ME fails with "Could not load file or assembly DevExpress.Persistent.BaseImpl.EF
 - **Canonical xafml only.** Node types are compared by element name. A hand-edited module file that
   uses the generic `Item` alias gets a needless type replacement, which discards that node's
   unspecified values and children.
-- **Intervening layers.** A change the user made on top of the application project's `Model.xafml`
-  (or a tenant layer) lands below it after the merge and can be overridden by it, in values and in
-  structure. Merge into the highest file layer you own when that layer customises the same view.
+- **Intervening layers, partly.** The application project's `Model.xafml` is handled (see step 6
+  above): a view it creates is merged there, a real overlap is refused. A tenant layer or any other
+  layer between the module and the user is not looked at. If your platform file has accumulated
+  layout customisations over the years, move the platform-neutral ones down first: feed each view
+  node through `MergeViewIntoFile` against the module xafml and delete it from the platform file,
+  keeping only what names a platform type (editor types, Razor control items, dashboards). The
+  Blazor layer sits above the module exactly like the user layer, so the splice semantics are the
+  same and the composed model does not change.
 - **Platform-specific content in the agnostic module.** The runtime reads it fine; the Model Editor
   opened on the platform-agnostic module alone shows Blazor-only properties and nodes as unusable.
-- **One platform layer.** The diff lands in the platform-agnostic module. If it should be
-  Blazor-only, point `ModuleXafmlPath` at `XafMergerTool.Blazor.Server/Model.xafml`.
+- **One platform layer.** The diff lands in the platform-agnostic module unless the Blazor
+  `Model.xafml` creates the view. To force the Blazor layer for everything, point
+  `ModuleXafmlPath` at `Model.xafml`; without the key the controller falls back to
+  `../XafMergerTool.Module/Model.DesignedDiffs.xafml`, so an app that keeps appsettings out of git
+  still works.
 - **Shared model differences in the database.** The Template Kit leaves `CreateCustomModelDifferenceStore`
   commented out; with it enabled, XAF imports the application project's `Model.xafml` into the
   `ModelDifference` table once (UserId empty) and ignores the file afterwards. Merging into the

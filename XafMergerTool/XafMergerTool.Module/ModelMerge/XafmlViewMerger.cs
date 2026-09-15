@@ -43,6 +43,46 @@ public static class XafmlViewMerger
         doc.Save(writer);
     }
 
+    /// <summary>
+    /// The xafml that holds the given language aspect next to <paramref name="xafmlPath"/>, or null when there is
+    /// none. XAF names them two ways: a module's <c>Model.DesignedDiffs.xafml</c> has
+    /// <c>Model.DesignedDiffs.Localization.nl-NL.xafml</c>, an application project's <c>Model.xafml</c> has
+    /// <c>Model_nl-NL.xafml</c>. Only an existing file counts: a new one would also need an EmbeddedResource entry
+    /// in the csproj, which is the developer's decision, not a merge's.
+    /// </summary>
+    public static string? FindLocalizationFile(string xafmlPath, string aspect)
+    {
+        var dir = Path.GetDirectoryName(xafmlPath) ?? "";
+        var stem = Path.GetFileNameWithoutExtension(xafmlPath);
+        foreach (var candidate in new[] { $"{stem}.Localization.{aspect}.xafml", $"{stem}_{aspect}.xafml" })
+        {
+            var full = Path.Combine(dir, candidate);
+            if (File.Exists(full)) return full;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// True when a layer that sits ABOVE the merge target (typically the application project's Model.xafml) would
+    /// override something in <paramref name="diff"/> after the merge: both mention the same node (same key path)
+    /// and either set the same attribute, or the upper node is Removed or IsNewNode there, or the diff removes or
+    /// recreates that node. An upper node that merely exists (a ListView carrying only EditorTypeName while the
+    /// diff changes its Columns, say) is no overlap: the composed model still shows the merged values.
+    /// </summary>
+    public static bool Overlaps(XElement upper, XElement diff)
+    {
+        if (Key(upper) != Key(diff)) return false;
+        if (Flag(upper, "Removed") || Flag(upper, "IsNewNode") || Flag(diff, "Removed") || Flag(diff, "IsNewNode")) return true;
+        var upperAttrs = upper.Attributes().Where(a => !IsKeyOrState(a)).Select(a => a.Name).ToHashSet();
+        if (diff.Attributes().Any(a => !IsKeyOrState(a) && upperAttrs.Contains(a.Name))) return true;
+        foreach (var child in diff.Elements())
+        {
+            var counterpart = upper.Elements().FirstOrDefault(e => Key(e) == Key(child));
+            if (counterpart != null && Overlaps(counterpart, child)) return true;
+        }
+        return false;
+    }
+
     // Mirrors ModelNode.MoveNode (DX 26.1, ModelNode.cs 3751-3807); source = user-layer node, target = module node or null.
     static void MergeNode(XElement parent, XElement? target, XElement source, bool targetParentNew, Action<XElement> insertNew)
     {

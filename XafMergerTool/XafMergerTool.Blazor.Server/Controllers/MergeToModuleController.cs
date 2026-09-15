@@ -17,6 +17,13 @@ namespace XafMergerTool.Blazor.Server.Controllers;
 public class MergeToModuleController : ViewController
 {
     const string DevOnlyKey = "DevOnly";
+    const string EnabledKey = "XafModelMerge:Enabled";
+    const string ModulePathKey = "XafModelMerge:ModuleXafmlPath";
+    /// <summary>
+    /// Used when the config key is absent. Some apps keep appsettings out of git (connection strings), so the
+    /// default lives in code and the key is an override, e.g. "Model.xafml" to merge into the platform layer.
+    /// </summary>
+    const string DefaultModulePath = "../XafMergerTool.Module/Model.DesignedDiffs.xafml";
     readonly SimpleAction merge;
 
     public MergeToModuleController()
@@ -36,7 +43,7 @@ public class MergeToModuleController : ViewController
     {
         base.OnActivated();
         var config = Application.ServiceProvider.GetRequiredService<IConfiguration>();
-        merge.Active[DevOnlyKey] = Debugger.IsAttached || config.GetValue<bool>("XafModelMerge:Enabled");
+        merge.Active[DevOnlyKey] = Debugger.IsAttached || config.GetValue<bool>(EnabledKey);
     }
 
     protected override void OnDeactivated()
@@ -54,17 +61,32 @@ public class MergeToModuleController : ViewController
         var view = UserLayer.ViewDiff(userLayer, viewId);
         if (view == null)
         {
-            Application.ShowViewStrategy.ShowMessage($"No user-layer changes for {viewId}.", InformationType.Info);
+            Application.ShowViewStrategy.ShowMessage($"No user-layer changes for {viewId}. (Close the Customize Layout form first; closing it is what saves the layer.)", InformationType.Info);
             return;
         }
+        var userCreated = (string?)view.Attribute("IsNewNode") == "True";
+        var path = TargetFor(ResolveModulePath(), viewId, out var targetNote);
+
+        // Language aspects (D5). Undo() clears every aspect of the view, so whatever the other aspects hold must be
+        // merged as well or it is lost. A module-defined view's aspect diffs go to the target's localization sibling
+        // (Model.DesignedDiffs.Localization.nl-NL.xafml): a caption renamed in the layout designer lands in the
+        // current UI language's aspect, so any app that runs in a non-English culture has these on most views.
         // A view the user layer created (Save As Variant) is merged whole and removed; its other aspects hold only
         // the localizable defaults XAF writes when it shows a new DetailView (CaptionColon, RequiredFieldMark) and
-        // are dropped. A module-defined view keeps the refusal: Undo() clears every aspect, only aspect 0 is merged.
-        var userCreated = (string?)view.Attribute("IsNewNode") == "True";
+        // are dropped.
+        var localized = new List<(string Aspect, XElement Diff, string File)>();
         if (!userCreated)
             for (var i = 1; i < userLayer.AspectCount; i++)
-                if (UserLayer.ViewDiff(userLayer, viewId, i) != null)
-                    throw new UserFriendlyException($"{viewId} has localized changes (aspect '{userLayer.GetAspect(i)}'); only the default aspect is merged.");
+            {
+                var aspect = userLayer.GetAspect(i);
+                var aspectDiff = UserLayer.ViewDiff(userLayer, viewId, i);
+                if (aspectDiff == null) continue;
+                var file = XafmlViewMerger.FindLocalizationFile(path, aspect)
+                    ?? throw new UserFriendlyException(
+                        $"{viewId} has changes in the '{aspect}' aspect, but there is no localization xafml for that language next to {path}. " +
+                        "Add one (as EmbeddedResource) or reset that aspect for this view; nothing was merged.");
+                localized.Add((aspect, aspectDiff, file));
+            }
 
         // A variant is reachable only through its root view's Variants node, which lives in the user layer too:
         // merge that subtree along, and nothing else of the root (D3).
@@ -77,12 +99,23 @@ public class MergeToModuleController : ViewController
                 if (UserLayer.IsUserCreated(Application, (string?)v.Attribute("ViewID") ?? ""))
                     throw new UserFriendlyException($"Variant {(string?)v.Attribute("ViewID")} exists only in the user layer; open it and merge it first.");
 
-        var path = ResolveModulePath();
+        RefuseIfPlatformLayerOverrides(path, view, aspect: null);
+        if (rootVariants != null)
+            RefuseIfPlatformLayerOverrides(path, new XElement(rootDiff!.Name, new XAttribute("Id", rootId), rootVariants), aspect: null);
+        foreach (var l in localized)
+            RefuseIfPlatformLayerOverrides(path, l.Diff, l.Aspect);
+
+        var written = new List<string> { path };
         void MergeFiles()
         {
             XafmlViewMerger.MergeViewIntoFile(path, view);
             if (rootVariants != null) // the root's own element name: root and variant need not be the same view kind
                 XafmlViewMerger.MergeViewIntoFile(path, new XElement(rootDiff!.Name, new XAttribute("Id", rootId), rootVariants));
+            foreach (var l in localized)
+            {
+                XafmlViewMerger.MergeViewIntoFile(l.File, l.Diff);
+                if (!written.Contains(l.File)) written.Add(l.File);
+            }
         }
         void ClearUserLayer()
         {
@@ -126,17 +159,62 @@ public class MergeToModuleController : ViewController
         }
 
         var merged = rootVariants == null ? viewId : $"{viewId} and {rootId}/Variants";
+        if (localized.Count > 0) merged += $" (aspects: {string.Join(", ", localized.Select(l => l.Aspect))})";
         Application.ShowViewStrategy.ShowMessage(
-            $"Merged {merged} into {path}. Rebuild and restart to load it from the module.", InformationType.Success, 8000);
+            $"Merged {merged} into {string.Join(" and ", written)}.{targetNote} Rebuild and restart to load it from source.", InformationType.Success, 8000);
     }
 
     string ResolveModulePath()
     {
         var config = Application.ServiceProvider.GetRequiredService<IConfiguration>();
-        var configured = config["XafModelMerge:ModuleXafmlPath"];
-        if (string.IsNullOrWhiteSpace(configured))
-            throw new UserFriendlyException("XafModelMerge:ModuleXafmlPath is not configured.");
-        var env = Application.ServiceProvider.GetRequiredService<IWebHostEnvironment>();
-        return Path.GetFullPath(configured, env.ContentRootPath);
+        var configured = config[ModulePathKey];
+        var path = Path.GetFullPath(string.IsNullOrWhiteSpace(configured) ? DefaultModulePath : configured, ContentRoot());
+        if (!File.Exists(path))
+            throw new UserFriendlyException(
+                $"{path} does not exist. Merge To Module needs the source tree checked out (run from Visual Studio or `dotnet run` in the project folder); set {ModulePathKey} to override the target.");
+        return path;
     }
+
+    /// <summary>
+    /// A view that the application project's Model.xafml *creates* (IsNewNode there: a dashboard built around a
+    /// Razor component, a chart list with a platform editor) exists only in that layer, so its customisations
+    /// belong there too; merging them into the module would put the view's layout below the layer that defines
+    /// it. Such a view is merged into the platform file instead of the configured target, and the message says
+    /// so. Any other view keeps the configured target.
+    /// </summary>
+    string TargetFor(string configuredPath, string viewId, out string note)
+    {
+        note = "";
+        var platformPath = Path.Combine(ContentRoot(), "Model.xafml");
+        if (!File.Exists(platformPath) ||
+            string.Equals(Path.GetFullPath(platformPath), Path.GetFullPath(configuredPath), StringComparison.OrdinalIgnoreCase))
+            return configuredPath;
+        var upper = XafmlViewMerger.FindView(File.ReadAllText(platformPath), viewId);
+        if ((string?)upper?.Attribute("IsNewNode") != "True") return configuredPath;
+        note = $" {viewId} is defined by the application project's Model.xafml, so it was merged there instead of into the module.";
+        return platformPath;
+    }
+
+    /// <summary>
+    /// The application project's Model.xafml (and its Model_xx-XX.xafml for a language aspect) sits above the
+    /// module. A diff merged into the module lands below it and is overridden where both touch the same node:
+    /// same attribute, or a Removed/IsNewNode marker on a shared node (<see cref="XafmlViewMerger.Overlaps"/>).
+    /// Refuse only then; a platform node that merely carries an EditorTypeName while the diff moves columns is
+    /// fine. Skipped when the target already is the platform file.
+    /// </summary>
+    void RefuseIfPlatformLayerOverrides(string targetPath, XElement diff, string? aspect)
+    {
+        var platformPath = Path.Combine(ContentRoot(), "Model.xafml");
+        if (string.Equals(Path.GetFullPath(platformPath), Path.GetFullPath(targetPath), StringComparison.OrdinalIgnoreCase)) return;
+        if (aspect != null) platformPath = XafmlViewMerger.FindLocalizationFile(platformPath, aspect) ?? "";
+        if (platformPath == "" || !File.Exists(platformPath)) return;
+        var viewId = (string?)diff.Attribute("Id") ?? "";
+        var upper = XafmlViewMerger.FindView(File.ReadAllText(platformPath), viewId);
+        if (upper == null || !XafmlViewMerger.Overlaps(upper, diff)) return;
+        throw new UserFriendlyException(
+            $"{viewId} is also customised in {platformPath}, which sits above the module layer and would override part of this " +
+            $"merge. Either move that node into the module first, or set {ModulePathKey} to \"Model.xafml\" for this session.");
+    }
+
+    string ContentRoot() => Application.ServiceProvider.GetRequiredService<IWebHostEnvironment>().ContentRootPath;
 }

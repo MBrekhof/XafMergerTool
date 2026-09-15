@@ -48,11 +48,20 @@ Things you might want to change:
 | `"UserDiff"` check | Refuses when the last layer is not the user layer | Keep. It also refuses when security is off, which is correct: there is no user layer then |
 | `"Blazor"` in `UserLayer.ClearEmptyAspects` | Must equal the context id in `BlazorModule.cs` | Only if you registered the store with another id |
 | `config.GetValue<bool>("XafModelMerge:Enabled")` | Config gate besides `Debugger.IsAttached` | Rename, or drop the config gate and rely on the debugger only |
+| `DefaultModulePath` | `../XafMergerTool.Module/Model.DesignedDiffs.xafml` | Your module's path. This is what runs when the config key is absent, e.g. because appsettings is git-ignored |
+| `Path.Combine(ContentRoot(), "Model.xafml")` in `TargetFor` / `RefuseIfPlatformLayerOverrides` | The application project's own Model.xafml | Only if yours lives elsewhere |
 
-Do not remove the refusals (localised aspects on a module-defined view, a root whose `Variants`
-still reference an unmerged runtime-created view) or the `Version` guard in `ClearEmptyAspects`.
-They exist because `Undo()` clears more than gets merged, and because the DB store refuses stale
-writes; the reasons are in `docs/DESIGN.md`.
+Do not remove the refusals (a language aspect without a localization file, a root whose `Variants`
+still reference an unmerged runtime-created view, a platform node that overrides part of the diff)
+or the `Version` guard in `ClearEmptyAspects`. They exist because `Undo()` clears more than gets
+merged, and because the DB store refuses stale writes; the reasons are in `docs/DESIGN.md`.
+
+**Language aspects.** If your app runs in a culture other than the default, expect a diff in that
+aspect on most customised views: a caption renamed in the layout designer goes there. The action
+merges it into the localization file next to the target (`Model.DesignedDiffs.Localization.nl-NL.xafml`
+for a module, `Model_nl-NL.xafml` for an application project) and needs that file to exist. If your
+module has no localization file for the culture yet, add an empty one as `EmbeddedResource` with
+`DependentUpon` the main xafml, the way the Model Editor would.
 
 ### 3a. Optional: the runtime Model Editor options
 
@@ -90,9 +99,25 @@ merge reads them; without that they land in the culture's aspect and are lost.
 
 The path is resolved against the content root, which is the project folder under `dotnet run` and
 Visual Studio, and the working directory when you start the exe by hand. `appsettings.Development.json`
-gets `"Enabled": true` so the action shows without a debugger.
+gets `"Enabled": true` so the action shows without a debugger. When the key is absent the controller
+uses `DefaultModulePath` (see the table above), so an app that keeps appsettings out of git works too.
 
-To merge into the Blazor-only layer instead, point it at `YourApp.Blazor.Server/Model.xafml`.
+To merge into the Blazor-only layer instead, point it at `YourApp.Blazor.Server/Model.xafml`. Views
+that this file *creates* (`IsNewNode` on the view node) go there automatically, whatever the key says.
+
+### 4a. If your Blazor Model.xafml already customises views
+
+Years of Model Editor work on the application project leave view nodes in `Model.xafml` that sit above
+anything you merge into the module. The action refuses when such a node would actually override part
+of a merge. Do the move once, before you start merging: for every view node in `Model.xafml` that names
+nothing platform-specific (no `EditorTypeName`/`SettingTypeName`/`ControlTypeName`/`PropertyEditorType`
+with a platform type, no `SplitLayout`/`ChartSettings`, not a DashboardView), call
+`XafmlViewMerger.MergeViewIntoFile(modulePath, node)` and delete the node from `Model.xafml`. A node
+that mixes both (a list with a Blazor grid editor *and* column widths) is split: copy it, strip the
+platform attributes from the copy, merge the copy, and leave a node with just `Id` and the platform
+attributes behind. The Blazor layer sits above the module exactly like the user layer, so the composed
+Blazor model does not change; the WinForms app now inherits those layouts. A throwaway `[Explicit]`
+NUnit test in your test project is the simplest vehicle, run once and deleted.
 
 ## 5. Use it
 
@@ -134,7 +159,9 @@ diff the two and check `docs/DESIGN.md` for the ordering rule.
 | Symptom | Cause | Fix |
 |---|---|---|
 | "No user-layer changes for X" | Customisation form still open, or nothing changed | Close the form first |
-| "X has localized changes" | The user layer has a diff for the view in a language aspect | Out of scope; reset the view's localisation or merge it by hand |
+| "X has changes in the 'nl-NL' aspect, but there is no localization xafml" | A caption or other localizable value was changed while the UI ran in that culture, and the target has no `*.Localization.nl-NL.xafml` / `Model_nl-NL.xafml` | Add the localization file as `EmbeddedResource`, or reset that aspect for the view |
+| "X is also customised in …Model.xafml, which sits above the module layer" | The application project's Model.xafml sets the same attribute (or removes/creates the same node) the diff touches | Move that node into the module first (§4a), or point `ModuleXafmlPath` at `Model.xafml` |
+| "… does not exist. Merge To Module needs the source tree checked out" | Running the published exe, or `ModuleXafmlPath` points at the wrong place | Run from the project folder; check the key |
 | "Variant X exists only in the user layer" | Merging a root view whose `Variants` reference an unmerged runtime-created variant | Open that variant and merge it first |
 | *Master-Detail* missing on a list | Not `DxGridListEditor`, a lookup popup, a nested list, or no `CanEditModel` role | Expected; see README limitations |
 | *Delete Variant* missing on a variant | The variant is module-defined | Delete it in the Model Editor |
@@ -144,8 +171,9 @@ diff the two and check `docs/DESIGN.md` for the ordering rule.
 
 ## 8. What it deliberately does not do
 
-Whole-model merge, anything outside `Views`, localisation, conflict resolution, WinForms, non-canonical
-(hand-edited) xafml, protecting a merged change from an intervening layer that customises the
-same view, sharing an administrator's variant with other users before a rebuild (that is the shared
-model difference store), renaming or re-ordering variants, and deleting module-defined variants. The limitations list in the README is the contract; extend from `docs/DESIGN.md` and
+Whole-model merge, anything outside `Views`, conflict resolution, WinForms, non-canonical
+(hand-edited) xafml, creating a localization file that does not exist yet, intervening layers other
+than the application project's own `Model.xafml` (a tenant layer, say), sharing an administrator's
+variant with other users before a rebuild (that is the shared model difference store), renaming or
+re-ordering variants, and deleting module-defined variants. The limitations list in the README is the contract; extend from `docs/DESIGN.md` and
 `docs/MERGE-003-PLAN.md` if you need more.
