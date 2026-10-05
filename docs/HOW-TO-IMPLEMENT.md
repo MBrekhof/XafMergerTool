@@ -142,9 +142,10 @@ splitter writes `RelativePosition` into the same node, so it merges too.
 frame switches to the copy; customise it; *Merge To Module* writes the copy as a new view
 (`<Root>_<Caption>`, `IsNewNode`) plus the root's `Variants` node, and the frame goes back to the
 root. Until the rebuild the variant is gone from the running app. A variant created but not merged
-can be removed again with *Delete Variant*. The `Variants` node's `Current` is merged as it stood, so
-the module opens the variant the administrator last had selected; change it in the Model Editor if
-that is not what you want.
+can be removed again with *Delete Variant*. The `Variants` node's `Current` is each user's last pick
+and is never merged: without it XAF opens the first `Variants` entry (the writer orders them by Id,
+so not necessarily *Default*) until you set `Current` in the Model Editor. Merging a variant that
+already exists in source touches only that view.
 
 ## 6. Verify once
 

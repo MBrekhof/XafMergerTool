@@ -52,6 +52,8 @@ public class MergeRoundTripTests : PageTest
 
     static readonly string[] DefaultCol2 = { "Postal Code", "City", "Country" };
     static readonly string[] StreetInCol2 = { "Postal Code", "City", "Street", "Country" };
+    static readonly string[] StreetEmailInCol2 = { "Postal Code", "City", "Street", "Email", "Country" };
+    static readonly string[] PhoneInCol2 = { "Postal Code", "City", "Phone", "Country" };
 
     [Test]
     public async Task MoveField_Merge_Restart_LayoutComesFromModule()
@@ -122,7 +124,11 @@ public class MergeRoundTripTests : PageTest
         Assert.That(UserLayerViewIds(), Does.Not.Contain("Customer_ListView"));
     }
 
-    /// <summary>MERGE-006/007: a runtime-created variant and its registration merge, and ChangeVariant switches after restart.</summary>
+    /// <summary>
+    /// MERGE-006/007: a runtime-created variant and its registration merge, and ChangeVariant switches after restart.
+    /// CARD-2073: Current is the user's pick and never reaches the module; merging a module-defined variant after
+    /// switching to it leaves the root's Variants alone and the pick in the user layer.
+    /// </summary>
     [Test]
     public async Task SaveAsVariant_Merge_Restart_ChangeVariantSwitches()
     {
@@ -146,18 +152,53 @@ public class MergeRoundTripTests : PageTest
             Is.EqualTo(new[] { "PostalCode", "City", "Street", "Country" }), "variant's layout carries the move");
         Assert.That(ModuleView(ViewId).Element("Variants")!.Elements("Variant").Select(v => (string?)v.Attribute("ViewID")),
             Is.EquivalentTo(new[] { ViewId, variantId }), "root registers both variants");
+        Assert.That(ModuleView(ViewId).Element("Variants")!.Attribute("Current"), Is.Null, "Current is a per-user pick, not a module default");
         Assert.That(UserLayerViewIds(), Does.Not.Contain(variantId).And.Not.Contain(ViewId), "user layer holds neither the variant nor the registration");
         await ExpectColumn2(DefaultCol2, "frame is back on the root view");
 
         await Restart();
         await Login();
         await OpenAcme();
-        await ExpectColumn2(StreetInCol2, "module's Current variant opens after restart");
+        // No Current in the module: XAF takes the first Variants entry, and the writer orders them by Id
+        // (Customer_DetailView_Compact before Default), so the variant opens.
+        await ExpectColumn2(StreetInCol2, "first Variants entry opens after restart");
         await page.Locator("[role=tab]:has-text('Home')").ClickAsync();
         await OpenCombo("Compact");
         await page.Locator("ul[aria-label='View'] >> text=Default").ClickAsync();
         await ExpectColumn2(DefaultCol2, "ChangeVariant switches to the default layout");
         Assert.That(UserLayerViewIds(), Does.Not.Contain(variantId), "switching only records Current, not the view");
+        // Switching writes Current into the in-memory user layer; Blazor persists it at log off or with the next
+        // save, so the table is checked only after a merge, whose own save flushes it.
+
+        // CARD-2073 on the root itself: the pick alone is nothing to merge, and a layout change merges without it
+        // while the pick outlives the Undo that clears the root's user-layer subtree.
+        await page.Locator("[role=tab]:has-text('Tools')").ClickAsync();
+        await XafButton("Merge To Module").ClickAsync();
+        await Expect(page.GetByText($"No user-layer changes for {ViewId} besides the variant choice")).ToBeVisibleAsync();
+        await MoveAndMerge("phone", "country", PhoneInCol2, $"Merged {ViewId} into");
+        Assert.That(LayoutGroup("Customer_col2").Elements("LayoutItem").Select(i => (string?)i.Attribute("Id")),
+            Is.EqualTo(new[] { "PostalCode", "City", "Phone", "Country" }), "root's layout carries the move");
+        Assert.That(ModuleView(ViewId).Element("Variants")!.Attribute("Current"), Is.Null, "the root merge carries no Current");
+        Assert.That(UserLayerView(ViewId)?.Element("Layout"), Is.Null, "the root's layout diff left the user layer");
+        Assert.That(UserLayerCurrent(), Is.EqualTo("Default"), "the pick is back in the user layer after the root's Undo");
+
+        await page.Locator("[role=tab]:has-text('Home')").ClickAsync();
+        await OpenCombo("Default");
+        await page.Locator("ul[aria-label='View'] >> text=Compact").ClickAsync();
+        await ExpectColumn2(StreetInCol2, "ChangeVariant switches back to the variant");
+
+        // CARD-2073: the variant is module-defined now; merging it must not carry the root's Current along.
+        await MoveAndMerge("email", "country", StreetEmailInCol2, $"Merged {variantId} into");
+        Assert.That(LayoutGroup("Customer_col2", variantId).Elements("LayoutItem").Select(i => (string?)i.Attribute("Id")),
+            Is.EqualTo(new[] { "PostalCode", "City", "Street", "Email", "Country" }), "variant's layout carries the second move");
+        Assert.That(ModuleView(ViewId).Element("Variants")!.Attribute("Current"), Is.Null, "the user's Current did not leak into the module");
+        Assert.That(UserLayerViewIds(), Does.Not.Contain(variantId), "the variant's diff left the user layer");
+        Assert.That(UserLayerCurrent(), Is.EqualTo(variantId), "the user's Current survives the merge in the user layer");
+
+        await Restart();
+        await Login();
+        await OpenAcme();
+        await ExpectColumn2(StreetEmailInCol2, "the variant opens after restart, laid out by the module");
     }
 
     // The DevExpress combo box of a SingleChoiceAction in mode style: find it by its current text, open its dropdown.
@@ -339,9 +380,16 @@ public class MergeRoundTripTests : PageTest
         catch (SqlException) { /* first run: database does not exist yet */ }
     }
 
-    static string[] UserLayerViewIds() =>
+    static string[] UserLayerViewIds() => UserLayerViews().Select(v => (string?)v.Attribute("Id") ?? "").ToArray();
+
+    // The variant the user last picked, as the root's Variants node in the user layer records it.
+    static string? UserLayerCurrent() => UserLayerView(ViewId)?.Element("Variants")?.Attribute("Current")?.Value;
+
+    static XElement? UserLayerView(string id) => UserLayerViews().FirstOrDefault(v => (string?)v.Attribute("Id") == id);
+
+    static IEnumerable<XElement> UserLayerViews() =>
         XDocument.Parse("<Layers>" + UserLayerXml().Replace("<?xml version=\"1.0\" encoding=\"utf-8\"?>", "") + "</Layers>")
-            .Descendants("Views").Elements().Select(v => (string?)v.Attribute("Id") ?? "").ToArray();
+            .Descendants("Views").Elements();
 
     static string UserLayerXml()
     {

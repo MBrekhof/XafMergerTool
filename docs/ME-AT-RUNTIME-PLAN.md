@@ -214,7 +214,8 @@ ViewVariants registration; DESIGN.md gets the D1 to D7 table. Layer diagram unch
   `ResetViewSettingsController` uses.
 - The Blazor split-view DOM selector is `.xaf-masterdetail-container.direction-vertical|horizontal`;
   undocumented, may need a bump on a DX upgrade.
-- `IModelVariants.Current` is also where the runtime stores each user's last selection, so it lands in
-  the module as whatever the admin last picked. Same as the ME's `Current`, documented, not fixed.
+- `IModelVariants.Current` is also where the runtime stores each user's last selection. Fixed under
+  CARD-2073 (2026-10-05): `Current` is dropped from every merge, and the root's `Variants` ride along
+  only for a runtime-created variant.
 - Layout re-render after a view swap lags the toolbar by a moment; the E2E polls the column labels
   for up to 15 s instead of asserting immediately.

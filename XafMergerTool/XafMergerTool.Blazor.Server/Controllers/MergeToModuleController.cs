@@ -88,12 +88,25 @@ public class MergeToModuleController : ViewController
                 localized.Add((aspect, aspectDiff, file));
             }
 
-        // A variant is reachable only through its root view's Variants node, which lives in the user layer too:
-        // merge that subtree along, and nothing else of the root (D3).
+        // A user-created variant is reachable only through its root view's Variants node, which lives in the user
+        // layer too: merge that subtree along, and nothing else of the root (D3). For a variant that already exists
+        // in source, the root's Variants diff is only the user's Current pick, which stays in the user layer.
         var variantsManager = Frame.GetController<ChangeVariantController>()?.CurrentFrameViewVariantsManager;
         var rootId = variantsManager?.Variants?.RootViewId ?? viewId;
-        var rootDiff = rootId == viewId ? null : UserLayer.ViewDiff(userLayer, rootId);
-        var rootVariants = rootDiff?.Element("Variants");
+        var rootDiff = rootId == viewId || !userCreated ? null : UserLayer.ViewDiff(userLayer, rootId);
+        var rootVariants = rootDiff?.Element("Variants") is { } rv ? new XElement(rv) : null;
+        // Current is a per-user pick, never a module default: it is dropped from whatever is merged (CARD-2073).
+        foreach (var variants in new[] { view.Element("Variants"), rootVariants })
+        {
+            variants?.Attribute("Current")?.Remove();
+            if (variants is { HasElements: false, HasAttributes: false, Parent: not null }) variants.Remove();
+        }
+        if (rootVariants is { HasElements: false, HasAttributes: false }) rootVariants = null;
+        if (!view.HasElements && view.Attributes().All(a => a.Name == "Id"))
+        {
+            Application.ShowViewStrategy.ShowMessage($"No user-layer changes for {viewId} besides the variant choice.", InformationType.Info);
+            return;
+        }
         if (rootId == viewId)
             foreach (var v in view.Element("Variants")?.Elements() ?? [])
                 if (UserLayer.IsUserCreated(Application, (string?)v.Attribute("ViewID") ?? ""))
@@ -129,7 +142,10 @@ public class MergeToModuleController : ViewController
         {
             MergeFiles();
             // Same call ResetViewSettingsController makes: drops the last (user) layer's subtree for this view.
+            // On a root view that subtree holds the user's variant pick too; put it back (CARD-2073).
+            var pick = (View.Model as IModelViewVariants)?.Variants.Current;
             ((ModelNode)View.Model).Undo();
+            if (pick != null) ((IModelViewVariants)View.Model).Variants.Current = pick;
             ClearUserLayer();
         }
         else

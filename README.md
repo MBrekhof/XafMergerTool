@@ -68,8 +68,10 @@ split now comes from `Customer_ListView` in the module xafml (`MasterDetailMode`
 form now shows the copy (`Customer_DetailView_Compact`) and the *View* combo on the Home tab lists
 *Default* and *Compact*. Rearrange it with *Customize Layout*, then *Tools > Merge To Module*: the
 variant and the root's `Variants` node land in the xafml, the frame goes back to the default view.
-Rebuild, restart, open *Acme BV*: it opens in *Compact* (the module's `Current`), and the combo
-switches between the two. *Delete Variant* removes a variant that has not been merged yet.
+Rebuild, restart, open *Acme BV*: the combo switches between the two, and the variant you pick
+stays your own setting. The module carries no `Current`, so until you set one in the Model Editor
+XAF opens the first `Variants` entry (ordered by Id, so *Compact* here). *Delete Variant* removes a
+variant that has not been merged yet.
 
 ## Put it in your own app
 
@@ -200,10 +202,13 @@ ME fails with "Could not load file or assembly DevExpress.Persistent.BaseImpl.EF
   Variant*) carries `IsNewNode` and arrives in the module as a complete node; the action removes it from
   the user layer instead of `Undo()`, and its other aspects (the `CaptionColon` / `RequiredFieldMark`
   defaults XAF writes when it first shows a new DetailView) are dropped, not merged.
-- **A variant brings its root's `Variants` node along, and nothing else of the root.** Merging a variant
-  also merges the root view's `Variants` subtree from the user layer (the registration, captions and
-  `Current`), then clears just that subtree. Merging a root view whose `Variants` still reference an
-  unmerged runtime-created view is refused: open that variant and merge it first.
+- **A runtime-created variant brings its root's `Variants` node along, and nothing else of the root.**
+  Merging such a variant also merges the root view's `Variants` subtree from the user layer (the
+  registration and captions), then clears just that subtree. Merging a root view whose `Variants` still
+  reference an unmerged runtime-created view is refused: open that variant and merge it first.
+- **`Current` never leaves the user layer.** The `Variants` node's `Current` is where the runtime stores
+  each user's last pick, so merging it would make that pick everyone's default. It is dropped from every
+  merge; a variant that already exists in source merges on its own and leaves the root alone.
 - **Admin variants stay in the admin's user layer until merged.** Save As Variant writes to the current
   user's model layer only; other users see the variant after Merge To Module and a rebuild. Sharing at
   runtime without a rebuild would be the shared model difference store, which is out of scope.
