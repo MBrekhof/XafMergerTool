@@ -102,6 +102,8 @@ public class MergeToModuleController : ViewController
             if (variants is { HasElements: false, HasAttributes: false, Parent: not null }) variants.Remove();
         }
         if (rootVariants is { HasElements: false, HasAttributes: false }) rootVariants = null;
+        // The root goes to its own target: it may be a view the application project's Model.xafml creates.
+        var rootPath = rootVariants == null ? path : TargetFor(ResolveModulePath(), rootId, out _);
         if (!view.HasElements && view.Attributes().All(a => a.Name == "Id"))
         {
             Application.ShowViewStrategy.ShowMessage($"No user-layer changes for {viewId} besides the variant choice.", InformationType.Info);
@@ -114,7 +116,7 @@ public class MergeToModuleController : ViewController
 
         RefuseIfPlatformLayerOverrides(path, view, aspect: null);
         if (rootVariants != null)
-            RefuseIfPlatformLayerOverrides(path, new XElement(rootDiff!.Name, new XAttribute("Id", rootId), rootVariants), aspect: null);
+            RefuseIfPlatformLayerOverrides(rootPath, new XElement(rootDiff!.Name, new XAttribute("Id", rootId), rootVariants), aspect: null);
         foreach (var l in localized)
             RefuseIfPlatformLayerOverrides(path, l.Diff, l.Aspect);
 
@@ -123,7 +125,10 @@ public class MergeToModuleController : ViewController
         {
             XafmlViewMerger.MergeViewIntoFile(path, view);
             if (rootVariants != null) // the root's own element name: root and variant need not be the same view kind
-                XafmlViewMerger.MergeViewIntoFile(path, new XElement(rootDiff!.Name, new XAttribute("Id", rootId), rootVariants));
+            {
+                XafmlViewMerger.MergeViewIntoFile(rootPath, new XElement(rootDiff!.Name, new XAttribute("Id", rootId), rootVariants));
+                if (!written.Contains(rootPath)) written.Add(rootPath);
+            }
             foreach (var l in localized)
             {
                 XafmlViewMerger.MergeViewIntoFile(l.File, l.Diff);
